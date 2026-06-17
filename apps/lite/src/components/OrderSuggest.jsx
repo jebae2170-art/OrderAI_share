@@ -38,63 +38,6 @@ const KPICard = ({ label, value, sub, icon: Icon, color }) => (
   </div>
 );
 
-// style_mapping_data.json → Top 1 기준 디폴트 추천 데이터 변환
-function buildPreviewFromMapping(mapping) {
-  const recs = [];
-  for (const style of mapping.styles) {
-    const top1 = style.references.find(r => r.rank === 1);
-    if (top1) {
-      recs.push({
-        new_part_cd: style.new_part_cd,
-        new_item_nm: style.new_item_nm,
-        new_class2: style.new_class2,
-        class2: style.class2 || '',
-        추천발주량: top1.AI발주량,
-        판매가: top1.판매가,
-        // ref 관련 필드 — 화면 컬럼(발주/Ref_마감/진단 등)이 preview에서도 채워지도록
-        ref_part_cd: top1.part_cd,
-        ref_item_nm: top1.item_nm,
-        ref_prdt_nm: top1.prdt_nm,
-        ref_score: top1.score,
-        ref_총판매: top1['총판매'],
-        ref_총발주: top1['총입고'] ?? top1['총발주'],
-        ref_판매율: top1['판매율'],
-        ref_진단: top1['진단'],
-        ref_AI발주량: top1.AI발주량,
-        ref_prdt_img: top1.prdt_img,
-        ref_po_img: top1.po_img,
-        budget_scaled: false,
-        colors: [],  // 컬러 배분/Ref_ST30%은 Step 3 매핑 확정 시 cascade로 채워짐
-      });
-    } else {
-      recs.push({
-        new_part_cd: style.new_part_cd,
-        new_item_nm: style.new_item_nm,
-        new_class2: style.new_class2,
-        class2: style.class2 || '',
-        추천발주량: 0,
-        판매가: 0,
-        budget_scaled: false,
-        manual_input: true,
-        colors: [],
-      });
-    }
-  }
-
-  const totalQty = recs.reduce((s, r) => s + (r.추천발주량 || 0), 0);
-  return {
-    metadata: {
-      season: mapping.metadata.new_season,
-      total_styles: mapping.metadata.total_styles,
-      matched_styles: mapping.metadata.matched_styles,
-      total_recommendation_qty: totalQty,
-      scaled_count: 0,
-      category_budgets: [],
-    },
-    recommendations: recs,
-  };
-}
-
 export default function OrderSuggest() {
   const { user } = useAuth();
   const { brand, season } = useBrandSeason();
@@ -103,7 +46,6 @@ export default function OrderSuggest() {
     [user?.email, brand, season],
   );
   const [data, setData] = useState(null);
-  const [isPreview, setIsPreview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -326,32 +268,17 @@ export default function OrderSuggest() {
       })
       .catch(() => { setClassAnalysis([]); setItemAnalysis([]); setPrevStyles([]); });
 
-    // 1차: 확정 데이터 시도 → 없으면 2차: 맵핑 데이터로 프리뷰
+    // 확정 데이터만 표시. 미확정(Step 3 미확정 → 백엔드 204)이면 data=null → 빈 상태 안내 (프리뷰 미표시)
     api.fetchFile('order_recommendation_data.json')
       .then(json => {
         if (!json) throw new Error('no confirmed');
         setData(json);
         initConfirmedQtys(json);
-        setIsPreview(false);
         setLoading(false);
       })
       .catch(() => {
-        api.fetchFile('style_mapping_data.json')
-          .then(mapping => {
-            if (!mapping) throw new Error('style_mapping_data.json이 없습니다. 파이프라인을 먼저 실행하세요.');
-            return mapping;
-          })
-          .then(mapping => {
-            const preview = buildPreviewFromMapping(mapping);
-            setData(preview);
-            initConfirmedQtys(preview);
-            setIsPreview(true);
-            setLoading(false);
-          })
-          .catch(err => {
-            setError(err.message);
-            setLoading(false);
-          });
+        setData(null);
+        setLoading(false);
       });
   }, [api]);
 
@@ -596,6 +523,17 @@ export default function OrderSuggest() {
     );
   }
 
+  // Step 3 미확정 → 발주추천 없음: 프리뷰 대신 빈 상태 안내
+  if (!data) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-gray-500 gap-3">
+        <Info className="w-8 h-8 text-gray-300" />
+        <p className="text-sm font-medium text-gray-600">아직 발주추천이 없습니다</p>
+        <p className="text-xs text-gray-400">Step 3에서 유사스타일 매핑을 확정하면 발주추천이 생성됩니다.</p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Lite 전용: 본인 발주 추천 리셋 (화면 워터마크는 제거, Excel에는 백엔드에서 자동 부착됨) */}
@@ -624,16 +562,6 @@ export default function OrderSuggest() {
           </div>
         </div>
       )}
-      {/* 프리뷰 안내 배너 */}
-      {isPreview && (
-        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
-          <Info className="w-5 h-5 text-amber-500 shrink-0" />
-          <p className="text-sm text-amber-700">
-            Top 1 유사스타일 기준 예상 추천입니다. Step 3에서 유사스타일 매핑을 확정하면 컬러별 수량배분이 적용됩니다.
-          </p>
-        </div>
-      )}
-
       {/* KPI 카드 */}
       <div className="grid grid-cols-4 gap-4">
         <KPICard
@@ -900,7 +828,7 @@ export default function OrderSuggest() {
       )}
 
       {/* Gap 알람 배너 + 진단 패널 */}
-      {gapAlert && !isPreview && (
+      {gapAlert && (
         <div className="space-y-0">
           {/* 알람 배너 */}
           <div className={`flex items-center justify-between rounded-xl px-5 py-3 border ${
@@ -1036,7 +964,7 @@ export default function OrderSuggest() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-700">카테고리별 예산 KPI 요약</h3>
-            {!isPreview && (
+            {(
               <div className="flex items-center gap-2">
                 {rescaleMsg && (
                   <span className={`text-xs ${rescaleMsg.ok ? 'text-green-600' : 'text-red-500'}`}>
@@ -1157,7 +1085,7 @@ export default function OrderSuggest() {
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-gray-700">
-              스타일별 발주추천 {!isPreview && '(컬러 배분)'}
+              스타일별 발주추천 (컬러 배분)
             </h3>
             <button
               onClick={() => setShowColorGuide(!showColorGuide)}

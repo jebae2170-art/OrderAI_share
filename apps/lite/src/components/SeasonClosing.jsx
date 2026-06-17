@@ -257,16 +257,15 @@ const SeasonClosing = () => {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
           <KPICard
             label="총매출액"
-            value={`${(summary.total_sale_amt / 100000000).toFixed(1)}억`}
-            sub={`입고 ${(summary.total_in_amt / 100000000).toFixed(1)}억`}
+            value={`${((summary.total_sale_amt_actual ?? summary.total_sale_amt) / 100000000).toFixed(1)}억`}
             icon={DollarSign}
             color="text-violet-500"
-            yoyDelta={yoy?.summary?.total_revenue_growth_pct}
+            yoyDelta={yoy?.summary?.total_revenue_actual_growth_pct ?? yoy?.summary?.total_revenue_growth_pct}
             yoyUnit="%"
-            priorLabel={prior_year?.summary?.total_sale_amt ? `전년 ${(prior_year.summary.total_sale_amt / 100000000).toFixed(1)}억` : null}
+            priorLabel={(prior_year?.summary?.total_sale_amt_actual ?? prior_year?.summary?.total_sale_amt) ? `전년 ${((prior_year.summary.total_sale_amt_actual ?? prior_year.summary.total_sale_amt) / 100000000).toFixed(1)}억` : null}
           />
           <KPICard
-            label="총입고"
+            label="총입고량"
             value={summary.total_inbound?.toLocaleString()}
             icon={Package}
             color="text-blue-500"
@@ -275,7 +274,7 @@ const SeasonClosing = () => {
             priorLabel={prior_year?.summary?.total_inbound ? `전년 ${prior_year.summary.total_inbound.toLocaleString()}` : null}
           />
           <KPICard
-            label="총판매"
+            label="총판매량"
             value={summary.total_sales?.toLocaleString()}
             icon={ShoppingCart}
             color="text-green-500"
@@ -284,9 +283,8 @@ const SeasonClosing = () => {
             priorLabel={prior_year?.summary?.total_sales ? `전년 ${prior_year.summary.total_sales.toLocaleString()}` : null}
           />
           <KPICard
-            label="판매율"
+            label="누계판매율"
             value={`${summary.sell_through_rate}%`}
-            sub={summary.target_achievement === '달성' ? '목표 달성' : '목표 미달성'}
             icon={TrendingUp}
             color={summary.sell_through_rate >= 60 ? 'text-green-500' : 'text-amber-500'}
             yoyDelta={yoy?.summary?.sell_through_rate_delta}
@@ -294,15 +292,17 @@ const SeasonClosing = () => {
             priorLabel={prior_year?.summary?.sell_through_rate != null ? `전년 ${prior_year.summary.sell_through_rate}%` : null}
           />
           <KPICard
-            label="재고리스크"
-            value={`${summary.stock_risk}%`}
-            sub={`재고 ${summary.total_stock?.toLocaleString()}장`}
-            icon={TrendingDown}
-            color={summary.stock_risk > 50 ? 'text-red-500' : 'text-blue-500'}
-            yoyDelta={yoy?.summary?.stock_risk_delta}
+            label="마감예상판매율"
+            value={`${summary['fcst_eofs_예측마감판매율'] ?? summary.sell_through_rate}%`}
+            icon={TrendingUp}
+            color={(summary['fcst_eofs_예측마감판매율'] ?? summary.sell_through_rate) >= 60 ? 'text-green-500' : 'text-amber-500'}
+            yoyDelta={summary['fcst_eofs_예측마감판매율_전년마감_delta'] != null
+              ? summary['fcst_eofs_예측마감판매율_전년마감_delta']
+              : (prior_year?.summary?.sell_through_rate != null ? Number(((summary['fcst_eofs_예측마감판매율'] ?? summary.sell_through_rate) - prior_year.summary.sell_through_rate).toFixed(1)) : null)}
             yoyUnit="%p"
-            invertColor
-            priorLabel={prior_year?.summary?.stock_risk != null ? `전년 ${prior_year.summary.stock_risk}%` : null}
+            priorLabel={summary['fcst_전년마감판매율'] != null
+              ? `전년 마감 ${summary['fcst_전년마감판매율']}%`
+              : (prior_year?.summary?.sell_through_rate != null ? `전년 마감 ${prior_year.summary.sell_through_rate}%` : null)}
           />
         </div>
 

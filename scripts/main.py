@@ -30,13 +30,14 @@ from config_loader import get_grade_thresholds
 # 1. 데이터 로딩 및 전처리
 # ============================================
 
-def load_and_preprocess_data(file_path: str, year_type: str = 'current') -> pd.DataFrame:
+def load_and_preprocess_data(file_path: str, year_type: str = 'current', df_override=None) -> pd.DataFrame:
     """
     엑셀 파일을 로드하고 전처리하는 함수
 
     Args:
         file_path: 입력 엑셀 파일 경로
         year_type: 'current'(당해) 또는 'prior'(전년) 선택
+        df_override: 지정 시 d1 대신 이 raw DataFrame을 사용 (전년 동주차 스냅샷 등)
 
     Returns:
         전처리된 데이터프레임
@@ -44,12 +45,15 @@ def load_and_preprocess_data(file_path: str, year_type: str = 'current') -> pd.D
     label = '당해' if year_type == 'current' else '전년'
     print(f"[1단계] 데이터 로딩 중 ({label})")
 
-    # 데이터 로딩 (Snowflake/CSV 3-tier → 엑셀 폴백)
-    try:
-        from config_loader import load_data as _load_data
-        df = _load_data("d1")
-    except Exception:
-        df = pd.read_excel(file_path)
+    # 데이터 로딩 (override 우선 → Snowflake/CSV 3-tier → 엑셀 폴백)
+    if df_override is not None:
+        df = df_override.copy()
+    else:
+        try:
+            from config_loader import load_data as _load_data
+            df = _load_data("d1")
+        except Exception:
+            df = pd.read_excel(file_path)
     
     # 컬럼명 매핑 (기획서 기준)
     column_mapping = {
@@ -143,7 +147,9 @@ def load_and_preprocess_data(file_path: str, year_type: str = 'current') -> pd.D
         print("[경고] SEASON_GB 컬럼을 찾을 수 없습니다. 전체 데이터를 사용합니다.")
     
     # 결측치 처리
-    numeric_cols = ['IN_QTY', 'ORDER_QTY', 'SALE_QTY', 'STOCK_QTY']
+    # SALE_AMT_REAL/SALE_TAG_AMT/STOR_TAG_AMT: KG 정합용 금액 컬럼 (d1 SQL에서 추가, 구캐시엔 없을 수 있어 guard)
+    numeric_cols = ['IN_QTY', 'ORDER_QTY', 'SALE_QTY', 'STOCK_QTY',
+                    'SALE_AMT_REAL', 'SALE_TAG_AMT', 'STOR_TAG_AMT']
     for col in numeric_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -211,7 +217,15 @@ def analyze_total_season_health(df: pd.DataFrame) -> Dict:
     total_in_qty = df['IN_QTY'].sum() if 'IN_QTY' in df.columns else 0
     total_sale_qty = df['SALE_QTY'].sum() if 'SALE_QTY' in df.columns else 0
     total_stock_qty = df['STOCK_QTY'].sum() if 'STOCK_QTY' in df.columns else 0
-    
+
+    # --- KG(지식그래프) 발입출판재 쿼리 정합 지표 (택가/실판매액 기준) ---
+    # 실판매액(할인반영), 판매택가/입고택가(정가환산). d1 SQL의 신규 금액 컬럼 합산.
+    total_sale_amt_real = df['SALE_AMT_REAL'].sum() if 'SALE_AMT_REAL' in df.columns else 0
+    total_sale_tag = df['SALE_TAG_AMT'].sum() if 'SALE_TAG_AMT' in df.columns else 0
+    total_stor_tag = df['STOR_TAG_AMT'].sum() if 'STOR_TAG_AMT' in df.columns else 0
+    # KG 판매율 = 판매택가 / 입고택가 * 100 (KG 쿼리와 동일하게 정수 반올림)
+    sell_through_rate_amt = round(total_sale_tag / total_stor_tag * 100, 0) if total_stor_tag > 0 else 0
+
     # 판매율 계산
     sell_through_rate = (total_sale_qty / total_in_qty * 100) if total_in_qty > 0 else 0
     
@@ -221,6 +235,8 @@ def analyze_total_season_health(df: pd.DataFrame) -> Dict:
     # 목표 판매율 설정 (brand_config.json → targetSellThrough)
     target_rate = get_target_sell_through() * 100
     achievement_status = "달성" if sell_through_rate >= target_rate else "미달성"
+    # 택가(KG) 판매율 기준 목표달성 — 판매율 카드가 택가 기준으로 표시되므로 동일 기준 적용
+    achievement_status_amt = "달성" if sell_through_rate_amt >= target_rate else "미달성"
     
     # AI 코멘트 생성
     if sell_through_rate >= 75:
@@ -239,7 +255,13 @@ def analyze_total_season_health(df: pd.DataFrame) -> Dict:
         '판매율': round(sell_through_rate, 2),
         '재고리스크': round(stock_risk_rate, 2),
         '목표달성여부': achievement_status,
-        'AI코멘트': comment
+        'AI코멘트': comment,
+        # KG 정합 지표 (택가 기준)
+        '목표달성여부_택가': achievement_status_amt,
+        '실판매액': int(total_sale_amt_real),
+        '판매택가': int(total_sale_tag),
+        '입고택가': int(total_stor_tag),
+        '판매율_택가': float(sell_through_rate_amt),
     }
     
     return result
@@ -1392,6 +1414,11 @@ def build_prior_year_data(health_prior, class_prior, item_prior):
             "total_in_amt": total_in_amt_prior,
             "sell_through_rate": float(health_prior.get("판매율", 0)),
             "stock_risk": float(health_prior.get("재고리스크", 0)),
+            # KG 정합 지표 (전년)
+            "total_sale_amt_actual": int(health_prior.get("실판매액", 0)),
+            "total_sale_tag": int(health_prior.get("판매택가", 0)),
+            "total_stor_tag": int(health_prior.get("입고택가", 0)),
+            "sell_through_rate_amt": float(health_prior.get("판매율_택가", 0)),
         },
         "class_analysis": prior_class_list,
         "item_analysis": prior_item_list,
@@ -1417,6 +1444,13 @@ def build_yoy_data(summary_current, prior_year_data, class_current_list, item_cu
         ),
         "total_revenue_growth_pct": calculate_yoy_growth(
             summary_current["total_sale_amt"], ps["total_sale_amt"]
+        ),
+        # KG 정합 지표 YoY (총매출액=실판매액, 판매율=택가 기준)
+        "total_revenue_actual_growth_pct": calculate_yoy_growth(
+            summary_current.get("total_sale_amt_actual", 0), ps.get("total_sale_amt_actual", 0)
+        ),
+        "sell_through_rate_amt_delta": calculate_yoy_delta(
+            summary_current.get("sell_through_rate_amt", 0), ps.get("sell_through_rate_amt", 0)
         ),
     }
 
@@ -1471,6 +1505,9 @@ def export_season_closing_json(
     health_prior: Dict = None,
     class_prior: pd.DataFrame = None,
     item_prior: pd.DataFrame = None,
+    health_prior_season_end: Dict = None,
+    class_prior_season_end: pd.DataFrame = None,
+    item_prior_season_end: pd.DataFrame = None,
 ) -> None:
     """
     시즌 마감 분석 결과를 프론트엔드 대시보드용 JSON으로 출력
@@ -1610,7 +1647,13 @@ def export_season_closing_json(
             "sell_through_rate": float(total_health.get("판매율", 0)),
             "stock_risk": float(total_health.get("재고리스크", 0)),
             "target_achievement": str(total_health.get("목표달성여부", "")),
-            "ai_comment": str(total_health.get("AI코멘트", ""))
+            "ai_comment": str(total_health.get("AI코멘트", "")),
+            # KG(지식그래프) 정합 지표 — 총매출액=실판매액, 판매율=판매택가/입고택가
+            "total_sale_amt_actual": int(total_health.get("실판매액", 0)),
+            "total_sale_tag": int(total_health.get("판매택가", 0)),
+            "total_stor_tag": int(total_health.get("입고택가", 0)),
+            "sell_through_rate_amt": float(total_health.get("판매율_택가", 0)),
+            "target_achievement_amt": str(total_health.get("목표달성여부_택가", ""))
         },
         "class_analysis": class_list,
         "item_analysis": item_list,
@@ -1632,6 +1675,16 @@ def export_season_closing_json(
                 output["summary"], prior_year_data, class_list, item_list
             )
             print("  * 전년 대비(YoY) 데이터 포함")
+
+    # 마감예측판매율 벤치마크용: 전년 '동시즌 마감(season-end)' 스냅샷 (인시즌일 때만 별도 보유)
+    #   to-date KPI는 prior_year(동주차)와, 마감예측은 prior_year_season_end(마감)와 비교.
+    if (health_prior_season_end and class_prior_season_end is not None
+            and item_prior_season_end is not None):
+        if not class_prior_season_end.empty or not item_prior_season_end.empty:
+            output["prior_year_season_end"] = build_prior_year_data(
+                health_prior_season_end, class_prior_season_end, item_prior_season_end
+            )
+            print("  * 전년 동시즌 마감(prior_year_season_end) 데이터 포함 (마감예측 벤치마크용)")
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
@@ -1691,23 +1744,49 @@ def main():
                 print("[정보] 전년 데이터가 없습니다. YoY 비교 생략.")
         except Exception as e:
             print(f"[정보] 전년 데이터 로딩 실패 (YoY 비교 생략): {e}")
+
+        # 1-c. 인시즌: 전년/재작년 '동주차' 스냅샷 (to-date 실적 KPI의 사과-대-사과 YoY용)
+        #   당해(부분시즌) vs 전년(마감) 비교는 성숙도 불일치로 하락 과장 → 전년 동주차로 비교.
+        #   비인시즌(FW/마감)이면 None → 기존 전년 마감 기준 그대로 사용.
+        health_prior_asof = None
+        class_prior_asof = None
+        item_prior_asof = None
+        try:
+            import config_loader as _cl
+            df_asof_raw = _cl.load_season_raw_prev_asof()
+            if df_asof_raw is not None:
+                df_prior_asof = load_and_preprocess_data(
+                    input_file, year_type='prior', df_override=df_asof_raw)
+                if not df_prior_asof.empty:
+                    health_prior_asof = analyze_total_season_health(df_prior_asof)
+                    class_prior_asof = analyze_class_balance(df_prior_asof)
+                    item_prior_asof = analyze_item_efficiency(df_prior_asof)
+                    print(f"  * 인시즌 전년 동주차 스냅샷 분석 완료: {len(df_prior_asof)}행 (to-date YoY 기준)")
+        except Exception as e:
+            print(f"[정보] 전년 동주차 스냅샷 생략: {e}")
+
+        # to-date YoY 비교 기준: 인시즌이면 전년 동주차, 아니면 전년 마감(현행)
+        health_cmp = health_prior_asof if health_prior_asof is not None else health_prior
+        class_cmp = class_prior_asof if class_prior_asof is not None else class_prior
+        item_cmp = item_prior_asof if item_prior_asof is not None else item_prior
+        yoy_basis_label = "전년 동주차" if health_prior_asof is not None else "전년"
         print()
 
         # 2. Level 1: 전체 시즌 건강도 진단
         total_health = analyze_total_season_health(df)
 
-        # AI 코멘트에 전년 대비 맥락 추가
-        if health_prior:
+        # AI 코멘트에 전년 대비 맥락 추가 (인시즌이면 전년 동주차 기준)
+        if health_cmp:
             str_delta = calculate_yoy_delta(
-                total_health['판매율'], health_prior['판매율']
+                total_health['판매율'], health_cmp['판매율']
             )
             risk_delta = calculate_yoy_delta(
-                total_health['재고리스크'], health_prior['재고리스크']
+                total_health['재고리스크'], health_cmp['재고리스크']
             )
             if str_delta is not None:
                 direction = "개선" if str_delta > 0 else "하락"
                 total_health['AI코멘트'] += (
-                    f" 전년 판매율 {health_prior['판매율']:.1f}% 대비 "
+                    f" {yoy_basis_label} 판매율 {health_cmp['판매율']:.1f}% 대비 "
                     f"{'+' if str_delta > 0 else ''}{str_delta:.1f}%p {direction}, "
                     f"재고 리스크 {'+' if risk_delta > 0 else ''}{risk_delta:.1f}%p."
                 )
@@ -1748,9 +1827,13 @@ def main():
             item_analysis,
             style_analysis,
             json_output_file,
-            health_prior=health_prior,
-            class_prior=class_prior if class_prior is not None else pd.DataFrame(),
-            item_prior=item_prior if item_prior is not None else pd.DataFrame(),
+            health_prior=health_cmp,
+            class_prior=class_cmp if class_cmp is not None else pd.DataFrame(),
+            item_prior=item_cmp if item_cmp is not None else pd.DataFrame(),
+            # 인시즌이면 전년 마감 스냅샷도 함께 전달 → prior_year_season_end (마감예측 벤치마크)
+            health_prior_season_end=(health_prior if health_prior_asof is not None else None),
+            class_prior_season_end=(class_prior if health_prior_asof is not None else None),
+            item_prior_season_end=(item_prior if health_prior_asof is not None else None),
         )
 
         print()

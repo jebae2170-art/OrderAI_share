@@ -5,11 +5,15 @@ from config_loader import (
     get_sell_through_threshold, get_shortage_cutoff_date,
     get_diagnosis_thresholds,
     get_weekly_data_path, get_timeseries_output_path,
+    align_weekly_for_inseason, get_season_end_for_code, get_base_season,
 )
 
 _ST_THRESHOLD = get_sell_through_threshold()
 _ST_LABEL = f"결품시점({int(_ST_THRESHOLD * 100)}%)"  # 동적 컬럼명 (현재 설정에 맞춰 생성)
 _DIAG = get_diagnosis_thresholds()
+# 차트 가로축 cap: 시즌종료(seasonEndByType, SS=08/31) +1개월 여유 = 09/30.
+# 엔진과 동일 소스(get_season_end_for_code) 사용 → 시즌 넘는 주차(zero 꼬리)를 차트에서 제외.
+_CHART_CAP = get_season_end_for_code(get_base_season()) + pd.DateOffset(months=1)
 
 # 1. 데이터 로드 (Snowflake/CSV 3-tier → 엑셀 폴백)
 try:
@@ -23,7 +27,19 @@ except Exception:
     except Exception:
         df = pd.read_excel(_weekly_path, sheet_name=0)
 
-# 2. 전처리: 25S 시즌('당해') 데이터 필터링 및 날짜 변환
+# B(2026-06-11): 인시즌 주차필터(align)가 SS 전년12월(ISO 49~52주) 입고/발주를 누락 → KPI 오류
+#   (총발주=0·총입고 음수·ST% 0). 총발주/총입고/총판매는 **필터 전 당해 weekly 전체합**에서 산출.
+#   (차트·엔진은 필터 그대로 사용 → 무변동. 룩업: (PART_CD, COLOR_CD).)
+_KPI_COLS = ['ORDER_QTY_KR', 'STOR_QTY_KR', 'SALE_QTY_CNS']
+_cur_for_kpi = df[df['PERIOD'] == '당해'] if 'PERIOD' in df.columns else df
+_has_kpi = set(_KPI_COLS + ['PART_CD', 'COLOR_CD']).issubset(_cur_for_kpi.columns)
+_KPI_TOTALS = _cur_for_kpi.groupby(['PART_CD', 'COLOR_CD'])[_KPI_COLS].sum() if _has_kpi else None
+_KPI_TOTALS_PART = _cur_for_kpi.groupby('PART_CD')[_KPI_COLS].sum() if _has_kpi else None  # ALL(total) 룩업용
+
+# in-season SS: 당해 weekly를 GT 최신주차까지 정렬 (예측 as-of와 일치 → 곡선 연결). FW는 no-op.
+df = align_weekly_for_inseason(df)
+
+# 2. 전처리: 시즌('당해') 데이터 필터링 및 날짜 변환
 df_process = df[df['PERIOD'] == '당해'].copy()
 # CLASS1 = '의류'만 필터링 (ACC 제외)
 if 'CLASS1' in df_process.columns:
@@ -39,6 +55,17 @@ if _zero_inbound:
     _before = len(df_process)
     df_process = df_process[~df_process['PART_CD'].isin(_zero_inbound)].copy()
     print(f"[정보] 입고 실적 없는 품번 제외: {len(_zero_inbound)}개 품번 ({_before}행 -> {len(df_process)}행)")
+
+# 발주0·판매0 색상 제외 (미생산 SKU): 전 구간 0값 달력이 total 합산을 오염시키는 것 방지
+_color_agg = df_process.groupby(['PART_CD', 'COLOR_CD']).agg(
+    _in=('STOR_QTY_KR', 'sum'), _sale=('SALE_QTY_CNS', 'sum')
+)
+_dead_colors = _color_agg[(_color_agg['_in'] == 0) & (_color_agg['_sale'] == 0)].index
+if len(_dead_colors):
+    _before = len(df_process)
+    _keys = df_process.set_index(['PART_CD', 'COLOR_CD']).index
+    df_process = df_process[~_keys.isin(_dead_colors)].copy()
+    print(f"[정보] 발주0·판매0 색상 제외: {len(_dead_colors)}개 색상 ({_before}행 -> {len(df_process)}행)")
 
 # -------------------------------------------------------
 # 3. 핵심 로직: 스타일별 시계열 패턴 분석 함수
@@ -61,7 +88,10 @@ def generate_chart_data(group, init_date):
         # 최초입고일 4주 전 이후 데이터만 포함
         if cutoff_date is not None and row['END_DT'] < cutoff_date:
             continue
-            
+        # 시즌 가로축 cap(09/30) 초과분 제외 → 차트가 시즌 기간 밖으로 안 넘어감
+        if _CHART_CAP is not None and row['END_DT'] > _CHART_CAP:
+            continue
+
         label = ''
         if row['STOR_QTY_KR'] > 0 and pd.notnull(init_date) and row['END_DT'] > init_date:
             reorder_count += 1
@@ -78,7 +108,7 @@ def generate_chart_data(group, init_date):
         })
     return chart_data
 
-def analyze_style_pattern(group, is_total=False, _part_cd=None):
+def analyze_style_pattern(group, is_total=False, _part_cd=None, _color=None):
     # 날짜순 정렬
     group = group.sort_values('END_DT')
     
@@ -117,7 +147,21 @@ def analyze_style_pattern(group, is_total=False, _part_cd=None):
     final_str = group['Sell_Through'].iloc[-1] if not group.empty else 0
     total_in = group['STOR_QTY_KR'].sum()
     total_order = group['ORDER_QTY_KR'].sum() if 'ORDER_QTY_KR' in group.columns else (group['ORDER_QTY'].sum() if 'ORDER_QTY' in group.columns else total_in)
-    
+
+    # B: 인시즌 주차필터로 누락된 전년12월 입고/발주 보정 — 필터 전 당해 전체합으로 교체(당해만 매칭).
+    #   per-color 호출=(PART,COLOR) 룩업 / ALL(total) 호출=COLOR_CD 없으니 PART 합계 룩업.
+    _t = None
+    if not is_total and _color is not None and _KPI_TOTALS is not None and _part_cd is not None:
+        _k = (_part_cd, _color)                      # per-color: (PART, COLOR) 룩업
+        _t = _KPI_TOTALS.loc[_k] if _k in _KPI_TOTALS.index else None
+    elif _KPI_TOTALS_PART is not None and _part_cd is not None and _part_cd in _KPI_TOTALS_PART.index:
+        _t = _KPI_TOTALS_PART.loc[_part_cd]          # ALL(total): PART 합계 룩업
+    if _t is not None:
+        total_order = int(_t['ORDER_QTY_KR'])
+        total_in = int(_t['STOR_QTY_KR'])
+        total_sale = int(_t['SALE_QTY_CNS'])
+        final_str = (total_sale / total_in) if total_in > 0 else 0.0  # ST% 재산출(카드+진단)
+
     # 4분류: Hit / Normal / Shortage / Risk
     # 1차 판단: 최종 판매율 → 2차 판단: 결품 시점 vs CUTOFF (서브시즌별)
     part_cd = _part_cd or (group['PART_CD'].iloc[0] if 'PART_CD' in group.columns else '')
@@ -165,7 +209,7 @@ if len(df_process) < _before:
 # 4. 전체 스타일 분석 실행
 print("데이터 분석 중...")
 result_df = df_process.groupby(['ITEM_NM', 'PART_CD', 'COLOR_CD']).apply(
-    lambda g: analyze_style_pattern(g, _part_cd=g.name[1])
+    lambda g: analyze_style_pattern(g, _part_cd=g.name[1], _color=g.name[2])
 ).reset_index()
 
 # 5. 결과 저장
@@ -195,7 +239,7 @@ for _period in ['전년', '재작년']:
         continue
     print(f"[정보] {_period} 분석 중... ({_df_prior['PART_CD'].nunique()}개 스타일)")
     _result_prior = _df_prior.groupby(['ITEM_NM', 'PART_CD', 'COLOR_CD']).apply(
-        lambda g: analyze_style_pattern(g, _part_cd=g.name[1])
+        lambda g: analyze_style_pattern(g, _part_cd=g.name[1], _color=g.name[2])
     ).reset_index()
     _result_prior['AI 계산 기회비용'] = 0
     _result_prior['AI제안 발주량'] = 0

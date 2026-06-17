@@ -14,6 +14,9 @@ from .builders import (
 )
 from .broken import detect_commercial_stockout, compute_broken_series
 from .predictor import predict_s5_for_sc, apply_scale_up
+from .inseason_potential import (
+    is_in_season, build_prioryear_progress, build_prioryear_incr, inseason_forecast,
+)
 from .preprocess import (
     build_sf_lookups, build_sc_scale, build_rst_num_sizes, build_week_frame,
 )
@@ -65,9 +68,11 @@ def run_engine(
         min_sc_for_plc=engine_params.min_sc_for_plc,
     )
 
-    # 3. PLC ratio decay 클로저
+    # 3. PLC ratio decay 클로저 (서브시즌은 SS에서만 — FW 하드 보호)
     plc_ratio_fn = get_plc_ratio_decayed_factory(
         inputs.plc_ratio, engine_params.plc_tail_decay,
+        fw_order_fn=season_spec.fw_order,
+        use_subseason=(season_spec.season_type == "ss"),
     )
 
     # 4. SC별 스케일업
@@ -79,6 +84,16 @@ def run_engine(
 
     # 6. 주차 프레임 (현재 시즌만 사용 — 전 시즌 포함 시 프레임 폭발)
     all_week_list, all_week_start = build_week_frame(gt_season, inputs.weekly_raw)
+
+    # 7. 진행중 SS 잠재수요 외삽용 전년 누적판매분율 progress (SS만 사전계산)
+    py_progress = (
+        build_prioryear_progress(restored, season_spec)
+        if season_spec.season_type == "ss" else None
+    )
+    py_incr = (
+        build_prioryear_incr(restored, season_spec)
+        if season_spec.season_type == "ss" else None
+    )
 
     # 8. SC 루프
     sc_predictions = {}
@@ -104,6 +119,8 @@ def run_engine(
             sc_predictions[(prod_cd, color)] = _no_broken_result(
                 cdf, sf, prod_cd, color, season_spec.sale_col,
             )
+            _maybe_extrapolate(sc_predictions[(prod_cd, color)], item, season_spec, py_progress, py_incr,
+                           sub=str(prod_cd)[-1])
             continue
 
         dtw_result = _dtw_match(
@@ -118,19 +135,41 @@ def run_engine(
 
         scale_raw = sc_scale.get((prod_cd, color), 1.0)
         scale_adj = 1.0 + (scale_raw - 1.0) * brand_spec.scale_blend
-        pred_total = apply_scale_up(
-            pred_data['predicted'], sf.sales, broken.pos, scale_adj,
-            cdf, prod_cd, color,
-        )
 
-        total_demand = round(sum(pred_total))
-        sf_sale_total = sum(pred_data['actuals_sf'])
-
-        # 주차별 결품 상태 배열 (결품 주차만 loss 계산 대상)
+        # 주차별 결품 상태 배열 (loss 계산 + SS 전체수요선 per-week 판정에 사용)
         is_broken_series = compute_broken_series(
             cdf, brand_spec.avg_size_stock_threshold,
             rst_num_sizes, prod_cd, color,
         )
+
+        # 전체수요선 생성. SS는 per-week 결품 판정(비결품 주차=실판매 관측, 결품 주차=잠재수요 예측)
+        #   → 재입고로 결품 해소된 비결품 주차에 감쇠예측이 덮이는 문제 해소.
+        #   FW는 is_broken_series=None → 단일 결품시점 컷오프(기존 동작, 0-diff 보존).
+        pred_total = apply_scale_up(
+            pred_data['predicted'], sf.sales, broken.pos, scale_adj,
+            cdf, prod_cd, color,
+            is_broken_series=(is_broken_series if season_spec.season_type == "ss" else None),
+        )
+
+        # floor=실판매(방어): 수요선이 실판매보다 낮게 깔리지 않도록 전 주차 바닥 보정.
+        #   스무딩·스케일업이 끝난 최종값에 적용. 비결품 주차도 스무딩으로 실판매 아래로
+        #   내려갈 수 있으므로 결품/비결품 구분 없이 매주 보정(전체수요≥전체판매 불변식).
+        #   국내수요(predicted_sc)≥순수국내(actuals_tax=GT). 전체수요(predicted_total)≥국내전체판매(actuals_sf=weekly SALE_QTY_CNS).
+        #   ※ actuals_all(GT)은 순수국내라 화면 전체판매 바와 불일치 → 전체수요 바닥은 actuals_sf 사용.
+        #   total_demand(발주) 계산 전에 적용하여 발주에도 일관 반영.
+        #   ⚠️ SS 전용 게이트: FW(25F) 0-diff(오라클①) 보존을 위해 FW에는 미적용.
+        if season_spec.season_type == "ss":
+            _pred_sc = pred_data['predicted']
+            _at, _asf = pred_data['actuals_tax'], pred_data['actuals_sf']
+            for _i in range(len(pred_total)):
+                if _i < len(_pred_sc) and _i < len(_at):
+                    _pred_sc[_i] = max(_pred_sc[_i], _at[_i])
+                if _i < len(_asf):
+                    pred_total[_i] = max(pred_total[_i], _asf[_i])
+
+        # L2: 진행중 SS는 to-date 수요를 PLC 진행률로 full-season 외삽 (FW/마감SS는 기존 합).
+        total_demand = round(sum(pred_total))
+        sf_sale_total = sum(pred_data['actuals_sf'])
 
         # 결품 주차 한정 lost_qty 재계산 (potential - actual_sf, 음수 제외)
         actuals_sf = pred_data['actuals_sf']
@@ -160,6 +199,8 @@ def run_engine(
             'dtw_conf': dtw_result['conf'],
             'dtw_dist': dtw_result['dist'],
         }
+        _maybe_extrapolate(sc_predictions[(prod_cd, color)], item, season_spec, py_progress, py_incr,
+                           sub=str(prod_cd)[-1])
 
     style_aggregates = _aggregate_by_style(sc_predictions, gt_season)
     metrics = _compute_metrics(sc_predictions)
@@ -167,6 +208,27 @@ def run_engine(
 
 
 # ── 내부 헬퍼 ──
+
+
+def _maybe_extrapolate(d, item, season_spec, py_progress, py_incr, sub=None):
+    """진행중 SS: total_demand 외삽 + forward 투영 곡선 (결품/비결품 SC 공통).
+
+    sub: SC의 서브시즌(PROD_CD 마지막자리) — 전년 진행률/증분을 서브시즌별로 적용
+         (봄 긴팔이 여름 혹 안 받도록). None이면 item 레벨(기존 동작).
+    """
+    if season_spec.season_type != "ss" or py_progress is None:
+        return
+    actuals = d['actuals_tax']
+    if not is_in_season(d['week_numbers'], actuals, season_spec):
+        return
+    fc = inseason_forecast(d['predicted_total'], d['week_numbers'], actuals, item,
+                           py_progress, py_incr, season_spec, sub=sub,
+                           is_broken=(d.get('broken') is not None))
+    if fc is None:
+        return
+    d['total_demand'] = round(fc['potential'])
+    d['forecast_weeks'] = fc['forecast_weeks']
+    d['forecast_values'] = fc['forecast_values']
 
 
 def _reindex_weekly(cdf, all_week_list, all_week_start, sale_col):

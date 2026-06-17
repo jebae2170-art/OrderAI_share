@@ -8,6 +8,7 @@ UI(Step 0 BrandIndexSetup)에서 설정 → 서버 API → public/brand_config.j
 
 import json
 import os
+from datetime import date
 
 import pandas as pd
 
@@ -325,6 +326,30 @@ def get_weekly_data_path():
     return os.path.join(_data_dir(), 'weekly_raw.xlsx')
 
 
+def align_weekly_for_inseason(weekly_df):
+    """in-season SS: 당해 weekly를 GT(ground_truth) 최신주차까지로 정렬.
+
+    예측 as-of는 GT 기준이므로 화면 실적(weekly)도 그 시점에 맞춰야 예측과 매끄럽게
+    이어진다. FW(코드 끝 'F')나 GT==weekly 시점이면 사실상 no-op. 전년/재작년 행은 유지.
+    (보너스: 엔진 build_week_frame이 미래주차를 안 넣어 predicted_total ffill 누수도 차단.)
+    """
+    try:
+        if get_base_season()[-1].upper() != 'S':   # SS만 적용 (FW 무영향)
+            return weekly_df
+        gt = load_gt()
+        # as-of = 최신 실판매 주차. WEEK_OF_YEAR.max()는 교차연도 버퍼(Dec=woy49~52)에
+        #   오염되므로 최신 END_DT 날짜의 ISO주차로 산출 (SS as-of는 1~35주, wrap 없음).
+        gt_max = int(pd.to_datetime(gt['END_DT']).max().isocalendar()[1])
+    except Exception:
+        return weekly_df
+    if 'PERIOD' not in weekly_df.columns or 'END_DT' not in weekly_df.columns:
+        return weekly_df
+    df = weekly_df.copy()
+    woy = pd.to_datetime(df['END_DT']).dt.isocalendar().week.astype(int)
+    cur = df['PERIOD'] == '당해'
+    return df[(~cur) | (woy <= gt_max)].reset_index(drop=True)
+
+
 def get_similarity_mapping_path():
     """유사스타일 매핑 경로 (similarity_mapping.csv)"""
     return os.path.join(_data_dir(), 'similarity_mapping.csv')
@@ -595,12 +620,77 @@ def prefetch_all(force_refresh=False):
 def clear_data_cache():
     """데이터 캐시 전체 초기화 (브랜드/시즌 변경 시)"""
     _data_cache.clear()
+    _gt_mem.clear()
     for key in _DATA_SOURCES:
         path = _csv_path(key)
         if path and os.path.exists(path):
             os.remove(path)
             print(f"[DataLoader] {key}: CSV 삭제")
+    # 특수 캐시 (전년 동주차 스냅샷) 도 정리
+    extra = os.path.join(_data_dir(), "season_raw_prev_asof.csv")
+    if os.path.exists(extra):
+        os.remove(extra)
+        print("[DataLoader] d1_prev_asof: CSV 삭제")
     print("[DataLoader] 캐시 초기화 완료")
+
+
+# ── GT(ground_truth) 전용 로더 ──────────────────────────────────
+# _DATA_SOURCES와 분리: GT는 시즌 진행상태별로 포맷이 다르다 (FW/SS 무관, 인시즌 vs 마감).
+#   · 인시즌(진행중) : 단일시즌 raw (복원 전이라 ADJ 없음, 25/26컬럼) — Snowflake gt_ongoing.sql 최신값
+#   · 마감시즌       : 멀티시즌+ADJ 통합 (복원 완료, 18~20컬럼) — 엔지니어 제공 로컬 CSV 그대로 (복원수요 Snowflake 미적재)
+#   판별: ADJ 컬럼 유무 (복원은 시즌 종료 후 산출 → 인시즌엔 없음).
+# _DATA_SOURCES에 넣지 않는 이유: clear_data_cache가 마감시즌 멀티시즌 GT를 삭제하는 사고 방지.
+
+_gt_mem = {}  # {(brand, season): DataFrame} — 프로세스 내 1회 조회 캐시
+
+
+def _load_gt_from_snowflake():
+    """인시즌 GT를 Snowflake에서 조회 (gt_ongoing.sql). 실패 시 None."""
+    try:
+        from scripts import snowflake_client
+    except ImportError:
+        try:
+            import snowflake_client
+        except ImportError:
+            return None
+    sql = load_query("gt_ongoing.sql", **get_query_params())
+    if not sql:
+        return None
+    print("[GT] Snowflake 조회 중 (gt_ongoing.sql)...")
+    return snowflake_client.execute_query(sql)
+
+
+def load_gt(force_refresh=False):
+    """GT(ground_truth) 로더.
+
+    - 마감시즌(로컬 GT에 ADJ 복원 컬럼 존재) → 기존 로컬 CSV 그대로 (Snowflake 미적용).
+    - 인시즌(단일시즌 raw, ADJ 없음) → Snowflake 최신값 우선, 실패 시 로컬 CSV 폴백.
+      (사용자 합의 2026-05-28: 진행중 시즌만 최신값 업데이트, 과거 복원수요는 로컬 restored.csv 유지)
+      ※ FW/SS 구분이 아니라 시즌 진행상태 기준 — 26FW 진행 중 27FW 발주 시점도 인시즌으로 동일 처리.
+    """
+    path = get_gt_path()
+
+    # 마감시즌(복원 완료, 멀티시즌+ADJ): 엔지니어 로컬 CSV 그대로 — Snowflake 단일시즌 쿼리로 덮어쓰지 않음
+    if os.path.exists(path) and 'ADJ_SC_SALE_QTY_TAX' in pd.read_csv(path, nrows=0).columns:
+        return pd.read_csv(path)
+
+    # 인시즌: 메모리 → Snowflake → 로컬 raw CSV 폴백
+    ck = (get_brand(), get_base_season())
+    if not force_refresh and ck in _gt_mem:
+        return _gt_mem[ck]
+
+    df = _load_gt_from_snowflake()
+    if df is not None:
+        _gt_mem[ck] = df
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        df.to_csv(path, index=False, encoding='utf-8-sig')
+        print(f"[GT] Snowflake {len(df):,}행 → 캐시 ({path})")
+        return df
+
+    if os.path.exists(path):
+        print(f"[GT] Snowflake 실패 → 로컬 CSV 폴백 ({path})")
+        return pd.read_csv(path)
+    raise RuntimeError(f"[GT] 로드 실패: Snowflake 연결 또는 로컬 CSV({path}) 필요")
 
 
 def get_query_params():
@@ -640,6 +730,100 @@ def get_query_params():
         "prev_end_date_buffered": (prev_end + buf).strftime('%Y-%m-%d'),
         "prev2_end_date_buffered": (prev2_end + buf).strftime('%Y-%m-%d'),
     }
+
+
+# ── 인시즌 전년 동주차 (YoY 정합) ─────────────────────────────
+# to-date 실적 KPI(총매출/입고/판매율/누계판매율)의 전년비는 "전년 동주차" 기준이어야
+# 사과-대-사과다. 전년 마감(8/31)과 비교하면 당해 부분시즌(as-of)과 성숙도가 어긋나
+# 판매율 하락이 과장된다. (마감예상판매율 등 to-end 지표는 별도로 전년 마감과 비교)
+
+def get_current_asof_date():
+    """당해 in-season as-of 기준일 = GT(ground_truth) 최신 주마감(END_DT). 실패 시 None."""
+    try:
+        gt = load_gt()
+    except Exception:
+        return None
+    if gt is None or 'END_DT' not in gt.columns or len(gt) == 0:
+        return None
+    return pd.to_datetime(gt['END_DT'], errors='coerce').max()
+
+
+def is_inseason():
+    """진행중(in-season) 여부: base가 SS(코드 끝 'S') + as-of가 시즌마감 이전.
+
+    FW·마감 시즌은 False → 전년 동주차 보정 미적용(현행 마감 기준 그대로).
+    """
+    base = get_base_season()
+    if not base or base[-1].upper() != 'S':
+        return False
+    asof = get_current_asof_date()
+    if asof is None:
+        return False
+    return asof < get_season_end_for_code(base)
+
+
+def get_prev_asof_dates():
+    """전년/재작년 '동주차'(전년 동일 ISO주차 일요일) 누적 종료일. 인시즌 아니면 None.
+
+    예: 당해 as-of 2026-06-07(ISO 2026-W23-일) → 전년 2025-06-08, 재작년 2024-06-09.
+    """
+    if not is_inseason():
+        return None
+    asof = get_current_asof_date()
+    iso = asof.isocalendar()
+    iso_year, iso_week = int(iso[0]), int(iso[1])
+
+    def _same_week_sunday(year):
+        try:
+            return date.fromisocalendar(year, iso_week, 7)
+        except ValueError:
+            # 해당 연도에 그 ISO주차가 없으면 364일(52주) 단위로 역산 근사
+            return (asof - pd.Timedelta(days=364 * (iso_year - year))).date()
+
+    return {
+        "prev_asof_date": _same_week_sunday(iso_year - 1).strftime('%Y-%m-%d'),
+        "prev2_asof_date": _same_week_sunday(iso_year - 2).strftime('%Y-%m-%d'),
+    }
+
+
+def load_season_raw_prev_asof(force_refresh=False):
+    """전년/재작년을 '동주차' 누적 컷오프로 가져온 season_raw (d1 SQL 재사용).
+
+    당해 행은 d1과 동일. 전년/재작년만 마감(8/31)이 아닌 동주차로 컷한다.
+    인시즌이 아니면 None. 캐시: data/{brand}/{season}/season_raw_prev_asof.csv
+    (전년은 마감시즌이라 안정적이나 as-of 주차가 매주 이동 → _refresh_data가 force_refresh로 갱신)
+    """
+    asof_dates = get_prev_asof_dates()
+    if asof_dates is None:
+        return None
+
+    csv_path = os.path.join(_data_dir(), "season_raw_prev_asof.csv")
+    if not force_refresh and os.path.exists(csv_path):
+        return pd.read_csv(csv_path, encoding="utf-8-sig")
+
+    try:
+        from scripts import snowflake_client
+    except ImportError:
+        try:
+            import snowflake_client
+        except ImportError:
+            return None
+
+    params = dict(get_query_params())
+    params["prev_end_date"] = asof_dates["prev_asof_date"]
+    params["prev2_end_date"] = asof_dates["prev2_asof_date"]
+    sql = load_query("d1_season_raw.sql", **params)
+    if not sql:
+        return None
+
+    print(f"[DataLoader] d1_prev_asof: Snowflake 조회 "
+          f"(전년 동주차 {asof_dates['prev_asof_date']}, 재작년 {asof_dates['prev2_asof_date']})...")
+    df = snowflake_client.execute_query(sql)
+    if df is not None:
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        print(f"[DataLoader] d1_prev_asof: CSV 저장 ({len(df):,}행 → {csv_path})")
+    return df
 
 
 # ── 유틸리티 ─────────────────────────────────────────────────

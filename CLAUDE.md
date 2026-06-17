@@ -97,6 +97,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | `brand_config.json::brand` ≠ `.env::BRAND` | `RuntimeError` (consistency 가드) |
 | `data/` 안의 어떤 파일도 git commit | `.gitignore` 처리됨 |
 
+> **※ 동기화 예외 (오너 전용)**: 위 🔴 표의 `scripts/plc_engine/ core (engine.py / predictor.py / specs.py)` 변경 금지는 **운영자(사업부)의 수기 변경** 대상입니다. 오너(Judy)가 원천 저장소(`order_ai`)의 검증된 로직을 **정본 미러링으로 동기화**하는 작업은 예외이며, 이 경우 core 파일은 원천을 기준으로 갱신됩니다(3-way 머지, base=fork 시점). 운영자는 이 파일들을 직접 수정하지 말고, 로직 변경이 필요하면 오너에게 원천 반영을 요청하세요.
+
 ---
 
 ## 3. 자주 헷갈리는 패턴 — 디테일

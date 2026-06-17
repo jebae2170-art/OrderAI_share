@@ -15,6 +15,25 @@
 
 const API_BASE = (import.meta.env.BASE_URL?.replace(/\/$/, '') || '')
 
+// HTTP 헤더 값은 ISO-8859-1(Latin-1)만 허용한다. 포털이 내려준 email/role에
+// 한글 등 code point > 255 문자가 섞이면 fetch가 RequestInit.headers 생성 단계에서
+// TypeError를 던지므로, 헤더에 넣기 전 비-Latin1 문자를 모두 제거한다.
+function _latin1Safe(v) {
+  return String(v ?? '').replace(/[^\x00-\xFF]/g, '')
+}
+
+// roles는 배열/콤마문자열 모두 허용. 서버가 쓰는 `orderai:brand:{code}` 형식만
+// 통과시키고(라벨/한글 섞인 값 배제) Latin1로 정제한 콤마 문자열을 반환.
+function _safeRolesHeader(roles) {
+  const list = Array.isArray(roles)
+    ? roles
+    : (typeof roles === 'string' ? roles.split(',') : [])
+  const ok = list
+    .map((r) => (typeof r === 'string' ? r.trim() : ''))
+    .filter((r) => /^orderai:brand:[a-z]+$/i.test(r))
+  return ok.length > 0 ? _latin1Safe(ok.join(',')) : ''
+}
+
 // filename → Lite GET endpoint 매핑 (baseline + 본인 사물함 fallback)
 const FILE_TO_ENDPOINT = {
   'dashboard_data.json':            '/api/lite/dashboard',
@@ -58,10 +77,9 @@ export function createApiClient(userEmail, brand, season, userRoles = []) {
   function headers(contentType = 'application/json') {
     const h = {}
     if (contentType) h['Content-Type'] = contentType
-    if (userEmail) h['X-User-Email'] = userEmail
-    if (Array.isArray(userRoles) && userRoles.length > 0) {
-      h['X-User-Roles'] = userRoles.join(',')
-    }
+    if (userEmail) h['X-User-Email'] = _latin1Safe(userEmail)
+    const rolesHeader = _safeRolesHeader(userRoles)
+    if (rolesHeader) h['X-User-Roles'] = rolesHeader
     return h
   }
 
@@ -126,10 +144,9 @@ export function createApiClient(userEmail, brand, season, userRoles = []) {
       const litePath = _toLitePath(path)
       const url = `${API_BASE}${_appendQs(litePath)}`
       const h = {}
-      if (userEmail) h['X-User-Email'] = userEmail
-      if (Array.isArray(userRoles) && userRoles.length > 0) {
-        h['X-User-Roles'] = userRoles.join(',')
-      }
+      if (userEmail) h['X-User-Email'] = _latin1Safe(userEmail)
+      const rolesHeader = _safeRolesHeader(userRoles)
+      if (rolesHeader) h['X-User-Roles'] = rolesHeader
       return fetch(url, {
         method: 'POST',
         headers: h,

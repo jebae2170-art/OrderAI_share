@@ -48,57 +48,41 @@ class SeasonSpec:
     seasons_for_plc: list[str] = field(default_factory=list)
     fwo_range: tuple[int, int] = (1, 39)
     sale_col: str = "SC_SALE_QTY_TAX"
+    season_end_fwo: int = 0  # from_json에서 마감일 ISO주차로 연도-인식 유도 (하드코딩 금지)
 
     @classmethod
     def from_json(cls, path: str, season_code: str) -> SeasonSpec:
         data = json.load(open(path))
-        seasons_cfg = data.get("seasons", {})
-        if season_code in seasons_cfg:
-            s = dict(seasons_cfg[season_code])
-            s["fwo_range"] = tuple(s["fwo_range"])
-            return cls(**s)
-        # Fallback: season_code 끝 글자로 type 자동 도출 + 표준 디폴트.
-        if not season_code or season_code[-1].upper() not in ('F', 'S'):
-            raise RuntimeError(
-                f"season_code={season_code!r} 끝 글자가 F/S 가 아님 — type 도출 불가."
-            )
-        season_type = 'fw' if season_code[-1].upper() == 'F' else 'ss'
+        s = data["seasons"][season_code]
+        s["fwo_range"] = tuple(s["fwo_range"])
+        spec = cls(**s)
+        # season_end_fwo: 시즌 마감일 ISO주차 → fw_order 적용 (SS 항등=ISO주차, FW=39).
+        # config 하드코딩 금지 — 매 시즌 마감일에서 연도-인식 유도 (26S→36, 25S→35).
+        from config_loader import get_season_end_for_code
+        end_iso_week = int(get_season_end_for_code(season_code).isocalendar().week)
         try:
-            year_int = int(season_code[:-1])
-        except ValueError:
-            raise RuntimeError(
-                f"season_code={season_code!r} 의 연도 부분이 정수 아님."
-            )
-        type_char = season_code[-1]
-        plc_seasons = [f"{y:02d}{type_char}" for y in range(year_int - 2, year_int + 1)]
-        print(
-            f"[INFO] plc_engine_config.json::seasons[{season_code!r}] 미등록 — "
-            f"자동 fallback (type={season_type}, seasons_for_plc={plc_seasons}, "
-            f"fwo_range=(1,39), sale_col=SC_SALE_QTY_TAX). 커스텀 필요 시 명시 등록."
-        )
-        return cls(
-            season_code=season_code,
-            season_type=season_type,
-            seasons_for_plc=plc_seasons,
-            fwo_range=(1, 39),
-            sale_col='SC_SALE_QTY_TAX',
-        )
+            end_fwo = spec.fw_order(end_iso_week)
+        except NotImplementedError:
+            end_fwo = end_iso_week  # SS는 항등 (P2 전 임시; P2 후 fw_order가 동일값 반환)
+        object.__setattr__(spec, 'season_end_fwo', end_fwo)
+        return spec
 
     def fw_order(self, week: int) -> int:
         if self.season_type == "fw":
             return week - 22 if week >= 23 else week + 30
-        if self.season_type == "ss":
-            return week - 48 if week >= 49 else week + 4
-        raise ValueError(f"Unknown season_type: {self.season_type}")
+        return week  # SS: 1월초(ISO 1주) 시작, 연도경계 없음 → FW_ORDER = WEEK_OF_YEAR (항등)
 
     def fwo_to_label(self, fwo: int) -> str:
         if self.season_type == "fw":
             wk = fwo + 22 if fwo <= 30 else fwo - 30
             return f"W{wk:02d}"
-        if self.season_type == "ss":
-            wk = fwo + 48 if fwo <= 4 else fwo - 4
-            return f"W{wk:02d}"
-        raise ValueError(f"Unknown season_type: {self.season_type}")
+        return f"W{fwo:02d}"  # SS: 항등 (FW_ORDER = WEEK_OF_YEAR)
+
+    def fwo_to_week_int(self, fwo: int) -> int:
+        """FW_ORDER → ISO WEEK_OF_YEAR (int). predictor 인라인 역변환 일원화."""
+        if self.season_type == "fw":
+            return fwo + 22 if fwo <= 30 else fwo - 30
+        return fwo  # SS: 항등 (FW_ORDER = WEEK_OF_YEAR)
 
 
 @dataclass(frozen=True)

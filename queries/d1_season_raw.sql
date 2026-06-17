@@ -39,6 +39,10 @@ SELECT
     SUM(w.SALE_NML_QTY_CNS + w.SALE_RET_QTY_CNS)          AS SALE_QTY_CNS,
     SUM(w.SALE_NML_QTY_CHN + w.SALE_NML_QTY_GVL)          AS SALE_QTY_GLB,
     SUM(w.DELV_NML_QTY_WSL + w.DELV_RET_QTY_WSL)          AS WH_QTY,
+    -- KG(지식그래프) 발입출판재 쿼리 정합용 금액 컬럼 (택가/실판매액 기준)
+    SUM(w.SALE_NML_SALE_AMT_CNS + w.SALE_RET_SALE_AMT_CNS) AS SALE_AMT_REAL, -- 실판매액(소비자 정상+반품, 할인반영)
+    SUM(w.SALE_NML_TAG_AMT_CNS + w.SALE_RET_TAG_AMT_CNS)   AS SALE_TAG_AMT,   -- 판매택가(소비자 정상+반품, 정가환산)
+    SUM(w.STOR_TAG_AMT_KOR)                                AS STOR_TAG_AMT,   -- 입고택가(국내, 정가환산)
     SUM(w.STOR_QTY_KOR)
         - SUM(w.SALE_NML_QTY_CNS + w.SALE_RET_QTY_CNS)
         - SUM(w.DELV_NML_QTY_WSL + w.DELV_RET_QTY_WSL)   AS STOCK_QTY

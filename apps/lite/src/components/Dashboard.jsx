@@ -17,18 +17,18 @@ import {
 import { TrendingUp, AlertTriangle, Package, ShoppingCart, ArrowRight, Loader2, Percent, TrendingDown, Search, X } from 'lucide-react';
 
 // --- 1. 툴팁 컴포넌트 (기회비용 표시 로직 포함) ---
-const CustomTooltip = ({ active, payload, label, isSuccess }) => {
+const CustomTooltip = ({ active, payload, label, isSuccess, isLowDiag }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     return (
       <div className="bg-white p-4 border border-gray-200 shadow-lg rounded-lg text-sm z-50">
         <p className="font-bold mb-2 text-gray-700">{label} 주차</p>
 
-        {/* 잠재 판매량 (기회비용 발생 시 표시) */}
-        {data.potential_sale > data.sale && (
+        {/* 잠재 판매량 (기회비용 발생 시 표시) — risk/normal 진단은 잠재수요 미표시 */}
+        {!isLowDiag && data.potential_sale > data.sale && (
           <p className="text-red-500 flex items-center font-bold mb-1">
-            <TrendingUp size={14} className="mr-1" /> 잠재수요: {data.potential_sale.toLocaleString()}
-            <span className="text-xs ml-1 font-normal">(Loss: -{(data.potential_sale - data.sale).toLocaleString()})</span>
+            <TrendingUp size={14} className="mr-1" /> 잠재수요: {Math.round(data.potential_sale).toLocaleString()}
+            <span className="text-xs ml-1 font-normal">(Loss: -{Math.round(data.potential_sale - data.sale).toLocaleString()})</span>
           </p>
         )}
 
@@ -110,8 +110,10 @@ const CustomLegend = ({ payload }) => {
 };
 
 // --- 3. 메인 차트 섹션 (핵심 로직 수정됨) ---
-const ChartSection = ({ title, subTitle, totalData, colorsData, type }) => {
+const ChartSection = ({ title, subTitle, totalData, colorsData, type, diagnosisKey }) => {
   const isSuccess = type === 'success';
+  // risk/normal 진단: 잠재수요선·기회비용 미표시 (과잉재고/저판매율 → 품절 기회비용 비논리적)
+  const isLowDiag = ['risk', 'normal'].includes(diagnosisKey);
   const titleColor = isSuccess ? 'text-green-700' : 'text-red-700';
 
   // [수정] 탭 초기값은 항상 'total' (강제 이동 로직 제거)
@@ -179,26 +181,33 @@ const ChartSection = ({ title, subTitle, totalData, colorsData, type }) => {
   // [수정] 단가 하드코딩 제거 (데이터에서 가져오거나 없으면 0)
   const price = itemInfo.price || totalData?.itemInfo?.price || 0;
 
-  // 총 기회비용 수량 및 금액 계산
-  // Python에서 이미 계산된 loss 필드를 사용
-  const totalLossQty = rawData.reduce((acc, cur) => {
-    // 데이터에 loss 필드가 있으면 사용, 없으면 직접 계산
+  // 총 기회비용 수량 = 실현(과거) + 잠재(미래) 합산 표기
+  //  · 과거: 결품으로 이미 놓친 분 = Python loss 필드 (없으면 전체수요−실판매)
+  //  · 미래(forecast): 현재고로 못 채우는 미충족분 = 전체수요(빨강) − 마감예측(회색 eofs)
+  //  · 마감/FW 시즌은 forecast 포인트가 없어 자동으로 실현분만 (기존값 유지)
+  const totalLossQty = Math.round(rawData.reduce((acc, cur) => {
+    if (cur.is_forecast) {
+      const p = cur.potential_sale || 0;
+      const e = cur.eofs_sale || 0;
+      return acc + (p > e ? p - e : 0);   // 잠재 기회비용(미래 미충족)
+    }
+    // 실현 기회비용(과거)
     if (cur.loss !== undefined && cur.loss !== null) {
       return acc + cur.loss;
     }
-    // loss 필드가 없는 경우 직접 계산
     const p = cur.potential_sale || 0;
     const s = cur.sale || 0;
-    const loss = p > s ? p - s : 0;
-    return acc + loss;
-  }, 0);
+    return acc + (p > s ? p - s : 0);
+  }, 0));   // 수량은 정수 표시
 
   const estimatedLossAmount = totalLossQty * price;
 
   // Shortage 진단이면 기회비용 소량이어도 항상 표시
   const diagText = analysis['AI_진단'] || analysis['진단'] || totalData?.analysis?.['AI_진단'] || '';
   const isShortage = diagText.includes('Shortage');
-  const showLoss = totalLossQty >= 30 || (isShortage && totalLossQty > 0);
+  const hasForecast = rawData.some(p => p.is_forecast);   // in-season 마감예측 포인트 존재 시
+  // risk/normal은 잠재수요선·기회비용 카드 모두 숨김 (마감예측 회색막대·실판매는 유지)
+  const showLoss = !isLowDiag && (totalLossQty >= 30 || (isShortage && totalLossQty > 0) || hasForecast);
 
   return (
     <div className="bg-white p-6 rounded-xl shadow-md border border-gray-100 min-w-0 flex flex-col h-full">
@@ -261,7 +270,7 @@ const ChartSection = ({ title, subTitle, totalData, colorsData, type }) => {
             <XAxis dataKey="date" tick={{ fontSize: 11 }} interval={2} />
             <YAxis yAxisId="left" orientation="left" stroke="#8884d8" domain={[0, 'auto']} allowDataOverflow={true} tick={{ fontSize: 11 }} width={35} />
             <YAxis yAxisId="right" orientation="right" stroke="#82ca9d" domain={[0, 'auto']} allowDataOverflow={true} tick={{ fontSize: 11 }} width={35} />
-            <Tooltip content={<CustomTooltip isSuccess={isSuccess} />} />
+            <Tooltip content={<CustomTooltip isSuccess={isSuccess} isLowDiag={isLowDiag} />} />
             <Legend content={<CustomLegend />} verticalAlign="top" height={24} />
 
             <Area yAxisId="left" type="monotone" dataKey="stock" fill={areaColor} stroke={stockStroke} name="Stock" fillOpacity={0.6} />
@@ -271,6 +280,11 @@ const ChartSection = ({ title, subTitle, totalData, colorsData, type }) => {
 
             {/* 면세판매 - 연한 파란색 (stacked 상단, sale − actual_tax) */}
             <Bar yAxisId="right" dataKey="tax_free_sale" stackId="sales" barSize={14} fill="rgba(186,220,255,0.7)" name="전체판매" radius={[2, 2, 0, 0]} />
+
+            {/* 마감예측(Track2) - 미래주차 연한 회색 막대 (전체판매에서 자연 연결, 표시 전용) */}
+            {hasForecast && (
+              <Bar yAxisId="right" dataKey="eofs_sale" stackId="sales" barSize={14} fill="rgba(148,163,184,0.5)" name="마감예측" radius={[2, 2, 0, 0]} />
+            )}
 
             {/* S5 국내수요예측 - 붉은색 점선 (Bar 뒤에 선언 → 최상단 표시) */}
             {showLoss && (
@@ -337,9 +351,15 @@ const ChartSection = ({ title, subTitle, totalData, colorsData, type }) => {
               <span className="font-bold">{analysis['총판매']?.toLocaleString() || '-'}</span>
             </div>
             <div className="flex justify-between items-center mt-1 pt-1 border-t border-gray-200">
-              <span className="text-gray-600 font-bold">마감 ST%</span>
+              <span className="text-gray-600 font-bold">누계 ST%</span>
               <span className={`font-bold ${analysis['최종판매율'] >= 80 ? 'text-green-600' : analysis['최종판매율'] <= 40 ? 'text-red-600' : 'text-gray-800'}`}>
                 {analysis['최종판매율']}%
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-gray-600 font-bold">예상 ST%</span>
+              <span className="font-bold text-gray-800">
+                {analysis['fcst_예측마감판매율'] != null ? `${analysis['fcst_예측마감판매율']}%` : '-'}
               </span>
             </div>
           </div>
@@ -665,6 +685,7 @@ const App = () => {
                 type="success"
                 title="Success Case"
                 subTitle={DIAGNOSIS_OPTIONS.success.find(o => o.key === selectedSuccessDiagnosis)?.description || ''}
+                diagnosisKey={selectedSuccessDiagnosis}
                 totalData={currentSuccessData?.total}
                 colorsData={currentSuccessData?.colors}
               />
@@ -735,6 +756,7 @@ const App = () => {
                 type="failure"
                 title="Failure Case"
                 subTitle={DIAGNOSIS_OPTIONS.failure.find(o => o.key === selectedFailureDiagnosis)?.description || ''}
+                diagnosisKey={selectedFailureDiagnosis}
                 totalData={currentFailureData?.total}
                 colorsData={currentFailureData?.colors}
               />

@@ -47,6 +47,16 @@ def predict_s5_for_sc(
     broken_week = broken.week
     broken_pos = broken.pos
 
+    # 서브시즌(ADDITIVE): SC의 PROD_CD 마지막자리 1회 도출.
+    # plc_ratio에 SESN_SUB가 없으면 클로저가 항상 'ALL'로 폴백 → 기존과 동일.
+    sub = None
+    if 'PROD_CD' in cdf.columns:
+        _pc = cdf['PROD_CD'].dropna()
+        if len(_pc) > 0:
+            sub = str(_pc.iloc[0])[-1]
+    elif prod_cd:
+        sub = str(prod_cd)[-1]
+
     weeks, week_numbers, actuals_all, actuals_tax, actuals_sf = [], [], [], [], []
     intakes, stocks, str_list = [], [], []
     predicted = []
@@ -107,8 +117,8 @@ def predict_s5_for_sc(
             continue
 
         # S1 (캘린더) 기본 폴백
-        cur_r = plc_ratio_fn(cdf['ITEM'].iloc[0] if 'ITEM' in cdf.columns else None, wk)
-        br_r = plc_ratio_fn(cdf['ITEM'].iloc[0] if 'ITEM' in cdf.columns else None, broken_week)
+        cur_r = plc_ratio_fn(cdf['ITEM'].iloc[0] if 'ITEM' in cdf.columns else None, wk, sub)
+        br_r = plc_ratio_fn(cdf['ITEM'].iloc[0] if 'ITEM' in cdf.columns else None, broken_week, sub)
         pred = anchor * (cur_r / br_r) if (cur_r and br_r and br_r > 0) else anchor
 
         # S5 Accurate: High+Medium은 DTW 시프트 적용 (S3)
@@ -116,11 +126,11 @@ def predict_s5_for_sc(
             offset = idx - (broken_pos - cdf.index[0])
             shifted_fwo = dtw_matched + offset
             broken_fwo = dtw_matched
-            shifted_wn = int(shifted_fwo + 22 if shifted_fwo <= 30 else shifted_fwo - 30)
-            broken_wn = int(broken_fwo + 22 if broken_fwo <= 30 else broken_fwo - 30)
+            shifted_wn = season_spec.fwo_to_week_int(shifted_fwo)
+            broken_wn = season_spec.fwo_to_week_int(broken_fwo)
             item = cdf['ITEM'].iloc[0] if 'ITEM' in cdf.columns else None
-            s_r = plc_ratio_fn(item, shifted_wn)
-            b_r = plc_ratio_fn(item, broken_wn)
+            s_r = plc_ratio_fn(item, shifted_wn, sub)
+            b_r = plc_ratio_fn(item, broken_wn, sub)
             if s_r and b_r and b_r > 0:
                 pred = anchor * (s_r / b_r)
 
@@ -142,8 +152,14 @@ def predict_s5_for_sc(
     }
 
 
-def apply_scale_up(predicted, sf_sales, broken_pos, scale_adj, cdf, prod_cd, color):
-    """전체수요예측 (브로큰 전=SF 실판매, 브로큰 후=국내예측 x scale_adj).
+def apply_scale_up(predicted, sf_sales, broken_pos, scale_adj, cdf, prod_cd, color,
+                   is_broken_series=None):
+    """전체수요예측 (결품 주차=국내예측 x scale_adj, 비결품 주차=SF 실판매).
+
+    결품 판정 방식:
+      - is_broken_series 제공(SS): 주차별 결품 상태로 판정 → 재입고로 결품 해소된
+        비결품 주차는 실판매(관측수요)로 되돌림(감쇠예측이 덮어쓰는 문제 해소).
+      - None(FW): broken_pos 단일 컷오프(첫 결품 이후 전부 예측) — 기존 동작·0-diff 보존.
 
     Args:
         predicted: 국내 예측 리스트
@@ -153,6 +169,7 @@ def apply_scale_up(predicted, sf_sales, broken_pos, scale_adj, cdf, prod_cd, col
         cdf: SC DataFrame
         prod_cd: 스타일 코드
         color: 컬러 코드
+        is_broken_series: 주차별 결품 bool 리스트 (SS). None이면 broken_pos 컷오프(FW).
 
     Returns:
         list: 전체수요예측 (3주 rolling MA 스무딩)
@@ -161,7 +178,12 @@ def apply_scale_up(predicted, sf_sales, broken_pos, scale_adj, cdf, prod_cd, col
     predicted_total_raw = []
     for i, (_, r) in enumerate(cdf.iterrows()):
         wk_r = int(r['WEEK_OF_YEAR'])
-        if i < bp_rel:
+        broken_i = (
+            is_broken_series[i]
+            if (is_broken_series is not None and i < len(is_broken_series))
+            else (i >= bp_rel)
+        )
+        if not broken_i:
             predicted_total_raw.append(max(0, sf_sales.get((prod_cd, color, wk_r), 0)))
         else:
             predicted_total_raw.append(predicted[i] * scale_adj)
