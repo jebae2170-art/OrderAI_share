@@ -4,6 +4,7 @@
 >
 > 막히는 곳 있으면 에러 메시지 + 본 문서 + 본 디렉토리 구조를 Claude Code 에 붙여넣고 도움 요청.
 
+
 ---
 
 ## 0. Prerequisites
@@ -95,7 +96,7 @@ cp .env.example .env
 ### 옵션 A: SSO (externalbrowser) — 권장
 
 ```
-SNOWFLAKE_ACCOUNT=ap-northeast-2.privatelink
+SNOWFLAKE_ACCOUNT=gv28284.ap-northeast-2.aws
 SNOWFLAKE_USER=your.email@fnf.co.kr            # 본인 SSO 이메일
 SNOWFLAKE_AUTH=externalbrowser                  # ← 이 줄 추가
 # SNOWFLAKE_PASSWORD — SSO 모드에선 무시됨, 비워두거나 줄 삭제 OK
@@ -115,7 +116,7 @@ setup.sh 또는 파이프라인 실행 시 브라우저 팝업이 떠서 본인 
 ### 옵션 B: Service Account + Password
 
 ```
-SNOWFLAKE_ACCOUNT=ap-northeast-2.privatelink   # 1Password 값
+SNOWFLAKE_ACCOUNT=gv28284.ap-northeast-2.aws   # 1Password 값
 SNOWFLAKE_USER=svc_orderai_brand               # 1Password 값
 SNOWFLAKE_PASSWORD=...                          # 1Password 값 (절대 git 커밋 X)
 # SNOWFLAKE_AUTH 줄은 추가 X (또는 비활성 주석)
