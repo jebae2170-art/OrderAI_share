@@ -25,6 +25,7 @@
 | 2 | `/prepare-pipeline` | brand+season 셋업 + PLC csv 확보 (없으면 자동 빌드) |
 | 3 | `/run-pipeline` | 분석 임계값 4종 (목표판매율 / 대물량 목표판매율 / 대물량 기준 / 등급 기준) 검토 + `run_all.py` 6 step (5 분석 + baseline DuckDB 적재) + 결과 진단 |
 | 4 | `/server-start` | 백엔드 + 프론트엔드 기동 + 브라우저 자동 띄우기 + 5 step UI 체크리스트 + 종료 안내 |
+| (반복) | `/weekly-refresh` | 인시즌 주간 갱신 — Snowflake 재조회 → run_all 재실행 → KG 교차검증 게이트 → 통과 시에만 baseline 반영(실패 시 직전 baseline 롤백) |
 
 각 스킬은 실패 시 진단 메시지와 함께 다음 행동을 안내합니다. 수동 트러블슈팅은 [`SETUP.md`](./SETUP.md) / [`CLAUDE.md`](./CLAUDE.md) 가 폴백.
 
