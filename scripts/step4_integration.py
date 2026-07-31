@@ -163,12 +163,11 @@ def load_mapping_long_xlsx(filepath: str, target_season: str) -> pd.DataFrame:
         print(f"    - {target_season} 필터 (Result 1): {before}행 → {len(df1)}행")
 
     if df1.empty:
-        print(f"    ⚠ {target_season} 시즌 데이터가 없습니다.")
-        return pd.DataFrame()
-
-    styles = _pivot_long_to_wide(df1, item_name_map, item_class2_map)
-    r1_count = len(styles)
-    print(f"    - Result 1 피벗: {r1_count} 스타일")
+        print(f"    ⚠ {target_season} Result 1 없음 → Result 2(GTM)로 보완 시도")
+        styles = []
+    else:
+        styles = _pivot_long_to_wide(df1, item_name_map, item_class2_map)
+        print(f"    - Result 1 피벗: {len(styles)} 스타일")
 
     # 2차: Result 2에서 미매칭 스타일 보완 (Snowflake/CSV 3-tier → 엑셀 폴백)
     r1_style_set = {s["NEW_PART_CD"] for s in styles}
@@ -194,6 +193,10 @@ def load_mapping_long_xlsx(filepath: str, target_season: str) -> pd.DataFrame:
         r2_styles = _pivot_long_to_wide(df2, item_name_map, item_class2_map)
         styles.extend(r2_styles)
         print(f"    - Result 2 보완: +{len(r2_styles)} 스타일 (R1 미포함)")
+
+    if not styles:
+        print(f"    ⚠ {target_season} Result 1·2 모두 비어있음.")
+        return pd.DataFrame()
 
     result = pd.DataFrame(styles)
     print(f"    - 피벗 완료: {len(result)} 스타일 (Wide format)")

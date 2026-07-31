@@ -452,6 +452,9 @@ const App = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const searchRef = React.useRef(null);
+  // 검색에서 선택한 idx를 진단 변경 useEffect가 덮어쓰지 않도록 임시 보관
+  const pendingSuccessIdxRef = React.useRef(null);
+  const pendingFailureIdxRef = React.useRef(null);
 
   useEffect(() => {
     // 실제 데이터 파일 로드
@@ -489,13 +492,24 @@ const App = () => {
   const failureData = sortByTotalSaleDesc(rawData.failure[selectedFailureDiagnosis]);
 
   // 진단 변경 시 디폴트 스타일 복원 (Hit→3ADJB2156, Shortage→3AMTB0154, 없으면 idx=0)
+  // 단, 검색에서 선택한 경우(pendingRef에 값이 있음)는 해당 idx를 우선 적용
   useEffect(() => {
-    setSelectedSuccessIdx(resolveDefaultIdx(successData, selectedSuccessDiagnosis));
+    if (pendingSuccessIdxRef.current != null) {
+      setSelectedSuccessIdx(pendingSuccessIdxRef.current);
+      pendingSuccessIdxRef.current = null;
+    } else {
+      setSelectedSuccessIdx(resolveDefaultIdx(successData, selectedSuccessDiagnosis));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSuccessDiagnosis]);
 
   useEffect(() => {
-    setSelectedFailureIdx(resolveDefaultIdx(failureData, selectedFailureDiagnosis));
+    if (pendingFailureIdxRef.current != null) {
+      setSelectedFailureIdx(pendingFailureIdxRef.current);
+      pendingFailureIdxRef.current = null;
+    } else {
+      setSelectedFailureIdx(resolveDefaultIdx(failureData, selectedFailureDiagnosis));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedFailureDiagnosis]);
 
@@ -511,7 +525,9 @@ const App = () => {
     allCategories.forEach(({ key, label, side }) => {
       const list = side === 'success' ? rawData.success[key] : rawData.failure[key];
       if (!list) return;
-      list.forEach((item, idx) => {
+      // 정렬된 데이터 기준 idx 산출 (successData/failureData와 일치시켜야 정확)
+      const sorted = sortByTotalSaleDesc(list);
+      sorted.forEach((item, idx) => {
         const code = item.total?.itemInfo?.code || '';
         const name = item.total?.itemInfo?.prdt_nm || item.total?.itemInfo?.name || '';
         if (code.toUpperCase().includes(q) || name.toUpperCase().includes(q)) {
@@ -524,11 +540,21 @@ const App = () => {
 
   const handleSearchSelect = (result) => {
     if (result.side === 'success') {
-      setSelectedSuccessDiagnosis(result.diagnosis);
-      setTimeout(() => setSelectedSuccessIdx(result.idx), 0);
+      // 같은 진단이면 useEffect가 트리거되지 않으므로 idx를 직접 설정,
+      // 다른 진단이면 ref에 idx를 저장 후 진단 변경 (useEffect가 ref 값 적용)
+      if (result.diagnosis === selectedSuccessDiagnosis) {
+        setSelectedSuccessIdx(result.idx);
+      } else {
+        pendingSuccessIdxRef.current = result.idx;
+        setSelectedSuccessDiagnosis(result.diagnosis);
+      }
     } else {
-      setSelectedFailureDiagnosis(result.diagnosis);
-      setTimeout(() => setSelectedFailureIdx(result.idx), 0);
+      if (result.diagnosis === selectedFailureDiagnosis) {
+        setSelectedFailureIdx(result.idx);
+      } else {
+        pendingFailureIdxRef.current = result.idx;
+        setSelectedFailureDiagnosis(result.diagnosis);
+      }
     }
     setSearchOpen(false);
     setSearchQuery('');
