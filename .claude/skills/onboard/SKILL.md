@@ -103,7 +103,7 @@ test -f .env && echo EXISTS || echo MISSING
 - `BRAND` — `public/brand_config.json` 의 `brand` 값과 **일치 필수** (대소문자 무관)
 
 옵션 B (Service Account):
-- `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` (예: `svc_orderai_brand`)
+- `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER` (예: `your_service_account`)
 - `SNOWFLAKE_PASSWORD` — 1Password 값 (절대 git 커밋 X)
 - `SNOWFLAKE_AUTH=externalbrowser` 줄 추가 **X**
 - 나머지 동일
