@@ -30,7 +30,9 @@ zip -rq "$OUT" . \
   -x "output/*.xlsx" -x "output/*.json" \
   -x "data/.weekly_backup/*" \
   -x "*__pycache__*" -x "*.pyc" -x "*.DS_Store" \
-  -x "*node_modules*" -x "apps/lite/dist/*"
+  -x "*node_modules*" -x "apps/lite/dist/*" \
+  -x "*.bak-share" -x "state/*.json" \
+  -x "apps/lite/.claude/*" -x "apps/lite/.omc/*"
 
 echo "[3/3] 자가검증"
 if unzip -l "$OUT" | awk '{print $4}' | grep -qxE "\.env(\.local|\.production)?"; then
