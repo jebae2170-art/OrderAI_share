@@ -25,7 +25,7 @@
 | 3 | **`restored.csv`** — 브랜드×시즌별 복원수요 (엔지니어 제공, Snowflake 재생성 불가) | 파일 전달 → `data/{brand}/{season}/restored.csv` 배치 (예: `data/mlb/26s/`) | run_all STEP 3 `KeyError: ADJ_SC_SALE_QTY_TAX` |
 | 4 | **`dcs-ai-cli`** 바이너리 + API key | 설치는 `SETUP.md` §4.5 | `/weekly-refresh` KG 게이트 실행 불가 |
 | 5 | **`S3_API_KEY`** (S3 Presigned URL API, AX팀 발급) | 1Password → `.env` 에 기입 | 운영배포(S3 업로드) 생략 — 로컬 반영까지만 |
-| 6 | **EC2 ssh 키** (`ec2-business-user@10.81.3.230` 접속용) | 키 파일 전달 → `~/.ssh` 배치 (BatchMode 접속 확인) | EC2 재시작·서빙검증 생략 — 로컬 반영까지만 |
+| 6 | **EC2 ssh 키 + 접속 대상** (`user@host` — 1Password) | 키 파일 전달 → `~/.ssh` 배치, 접속 대상은 `.env` 에 `EC2_SSH_TARGET=user@host` 로 기입 (BatchMode 접속 확인) | EC2 재시작·서빙검증 생략 — 로컬 반영까지만 |
 
 > #5·#6 이 없어도 갱신·KG검증·로컬 반영은 정상 동작합니다. **운영(EC2 8520) 배포 권한을 넘길 때만** 전달하고,
 > 전달 시점에 **원본 머신의 n8n 주간 자동배포는 반드시 비활성화** (이중 배포 경합 — 컷오버 절차는 원본 운영이관 가이드).

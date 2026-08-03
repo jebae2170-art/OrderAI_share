@@ -15,7 +15,9 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PY="$ROOT/.venv/bin/python3"
-EC2="ec2-business-user@10.81.3.230"
+# EC2 접속 대상은 .env::EC2_SSH_TARGET 에서 주입 (공개 저장소 — 내부 식별자 하드코딩 금지)
+EC2="$(grep -E '^EC2_SSH_TARGET=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+[ -n "$EC2" ] || { echo "❌ EC2_SSH_TARGET 미설정 (.env) — 운영배포 불가 (HANDOVER.md 전달물 참조)"; exit 1; }
 EC2_COMPOSE_DIR="20_OrderAI/apps/lite"
 
 LOG_DIR="$ROOT/logs/deploy"

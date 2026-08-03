@@ -10,6 +10,7 @@ S3 업로드만 되고 컨테이너 재시작이 누락된 "미반영 배포"를
 원본(order_ai)의 scripts/_verify_prd_serving.py 정본 미러링.
 """
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,7 +19,24 @@ import duckdb
 
 _ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DB = _ROOT / "data" / "production" / "order_ai.duckdb"
-EC2_HOST = "ec2-business-user@10.81.3.230"
+
+
+def _ec2_host():
+    """EC2 접속 대상 — env 우선, 없으면 .env 파싱 (공개 저장소라 하드코딩 금지)."""
+    v = os.getenv("EC2_SSH_TARGET", "").strip()
+    if not v:
+        env_path = _ROOT / ".env"
+        if env_path.exists():
+            for ln in env_path.read_text(encoding="utf-8").splitlines():
+                if ln.startswith("EC2_SSH_TARGET="):
+                    v = ln.split("=", 1)[1].strip().strip('"')
+                    break
+    if not v:
+        sys.exit("EC2_SSH_TARGET 미설정 (.env) — 서빙검증 불가 (HANDOVER.md 전달물 참조)")
+    return v
+
+
+EC2_HOST = _ec2_host()
 REMOTE_DB = "/data/duckdb/order_ai.duckdb"
 
 _SEASONS_SQL = ("SELECT brand_code, season_code, pipeline_version FROM seasons "

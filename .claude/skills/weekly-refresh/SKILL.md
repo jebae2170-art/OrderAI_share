@@ -101,7 +101,8 @@ rm -rf data/.weekly_backup
 
 ```bash
 grep -qE "^S3_API_KEY=.+" .env && echo "s3-key:OK" || echo "s3-key:MISSING"
-ssh -o BatchMode=yes -o ConnectTimeout=10 ec2-business-user@10.81.3.230 "echo ssh:OK" 2>/dev/null || echo "ssh:MISSING"
+EC2="$(grep -E '^EC2_SSH_TARGET=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+{ [ -n "$EC2" ] && ssh -o BatchMode=yes -o ConnectTimeout=10 "$EC2" "echo ssh:OK" 2>/dev/null; } || echo "ssh:MISSING"
 ```
 
 **둘 중 하나라도 MISSING** → 배포 생략하고 정상 종료:
@@ -122,7 +123,7 @@ bash scripts/_auto_deploy_prd.sh
 - **exit 0** → "✅ 주간 갱신 + 운영배포 완료 — 갱신 주차(END_DT)·KG 대사·서빙검증 요약" 출력.
 - **exit ≠ 0** → 로그 마지막 20줄 출력 + 단계별 안내:
   - STEP 1 실패 = 업로드 전 차단 → **운영은 기존 baseline 유지** (안전). 원인 해결 후 재시도.
-  - STEP 2 실패 = S3 는 갱신됐으나 EC2 미반영 → EC2 수동 재시작 필요 (`ssh ec2-business-user@10.81.3.230 "cd 20_OrderAI/apps/lite && docker compose restart"`).
+  - STEP 2 실패 = S3 는 갱신됐으나 EC2 미반영 → EC2 수동 재시작 필요 (`ssh $EC2_SSH_TARGET "cd 20_OrderAI/apps/lite && docker compose restart"` — 접속 대상은 `.env::EC2_SSH_TARGET`).
   - STEP 3 실패 = 재시작됐으나 버전 불일치/health 실패 → 로그 확인, 필요 시 `rollback/` 백업으로 되돌리기.
 - ⚠️ 두 브랜드 운영 시: 배포는 **두 번째 브랜드 갱신까지 끝낸 뒤 1회만** — baseline DuckDB 통째 업로드라 중간 배포는 첫 브랜드만 최신인 상태를 서빙하게 됨.
 
