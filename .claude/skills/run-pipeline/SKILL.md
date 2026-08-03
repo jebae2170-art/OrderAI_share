@@ -139,7 +139,7 @@ Background ID 사용자에게 안내: "파이프라인 실행 중 (예상 3-10�
 | `snowflake.connector.errors` 또는 `HttpError` | "Snowflake 연결 실패. `/onboard` Stage 6 진단표 참조하여 `.env` 점검." |
 | `Incorrect username or password` 또는 `390100` | "Snowflake credentials 오류. `.env` 의 SNOWFLAKE_USER / PASSWORD 재확인." |
 | `FileNotFoundError.*plc_forecast_standard` 또는 `RuntimeError.*PLC` | "PLC csv 부재 또는 손상. `/prepare-pipeline` 재호출하여 빌드." |
-| `KeyError.*BRAND` 또는 `RuntimeError.*brand` | "`.env` 의 BRAND ↔ `brand_config.json` 의 brand 불일치. 일치시키고 재실행." |
+| `RuntimeError.*brand` | "브랜드 설정 오류 — `brand_config.json` 의 brand 확인 (`.env` 에 BRAND 가 남아 있다면 삭제하거나 일치시킬 것)." |
 | `[N/5]` 가 `[5/5]` 미만 (중간 fail) | "Step {N} 에서 fail. 로그 마지막 30줄 출력 후 사용자에게 진단 요청." |
 | 그 외 | 로그 마지막 30줄 출력 + "에러 메시지를 Claude Code 에 붙여 추가 진단 요청." |
 

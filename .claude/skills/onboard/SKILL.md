@@ -147,7 +147,7 @@ Background ID 받아서 사용자에게 안내: "setup.sh background 실행 중 
 | `HttpError 290404` 또는 `404 Not Found.*snowflakecomputing.com` | "`SNOWFLAKE_ACCOUNT` 값 오타 의심. `.env` 의 account 값 재확인. 1Password 값과 한 글자도 다르지 않아야 합니다." |
 | `Incorrect username or password` 또는 `390100` | "Credentials 오류. 옵션 A 면 본인 SSO 이메일 / 옵션 B 면 1Password password 재확인." |
 | `Insufficient privileges` 또는 `No data found for brand` | "Snowflake 권한 부족. AX팀에 본인 role 의 브랜드 grant 확인 요청." |
-| `RuntimeError.*brand` 또는 `BRAND.*mismatch` | "`.env` 의 `BRAND` ↔ `public/brand_config.json` 의 `brand` 일치 필요." |
+| `RuntimeError.*brand` 또는 `BRAND.*mismatch` | "브랜드는 `public/brand_config.json` 의 `brand` 가 정본 — `.env` 에 BRAND 가 있다면 삭제(권장)하거나 일치시킬 것." |
 | `Could not connect to.*externalbrowser` 또는 SSO timeout | "SSO 브라우저 팝업 미완료. 헤드리스 환경이면 옵션 B (Service Account) 로 전환." |
 | 그 외 | 로그의 마지막 20줄을 출력 + "에러를 Claude Code 에 붙여넣어 추가 진단 요청." |
 

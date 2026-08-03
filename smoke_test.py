@@ -16,6 +16,19 @@ load_dotenv()
 
 
 # [I2] Brand name -> BRD_CD (Snowflake 컬럼 값) 매핑
+def _resolve_brand() -> str:
+    """운영 브랜드 (대문자). BRAND env 우선, 미설정 시 brand_config.json 폴백 —
+    server/permissions.py·config_loader.get_brand 와 동일 규칙."""
+    brand = os.environ.get("BRAND", "").strip().upper()
+    if brand:
+        return brand
+    p = os.path.join("public", "brand_config.json")
+    if os.path.exists(p):
+        with open(p) as f:
+            return (json.load(f).get("brand", "") or "").strip().upper()
+    return ""
+
+
 BRAND_TO_BRD_CD = {
     "MLB": "M",
     "DISCOVERY": "X",
@@ -66,8 +79,10 @@ class TestEnvironment:
             )
 
     def test_brand_configured(self):
-        brand = os.environ.get("BRAND", "")
-        assert brand, "BRAND env var not set"
+        # BRAND env 는 선택 — 미설정 시 brand_config.json 이 SoT (2026-08-03 이중관리 제거)
+        assert _resolve_brand(), (
+            "브랜드 미설정: brand_config.json 의 'brand' 필드(권장) 또는 BRAND env 필요"
+        )
 
     def test_brand_config_consistency(self):
         """[I8] BRAND env var 와 brand_config.json 이 둘 다 있으면 일치해야 함."""
@@ -150,7 +165,7 @@ class TestSnowflakeConnectivity:
 
     def test_brand_data_access(self):
         """[I2][I7] 브랜드별 데이터 접근 — parameterized query."""
-        brand = os.environ["BRAND"].upper()
+        brand = _resolve_brand()
         brd_cd = BRAND_TO_BRD_CD.get(brand)
         assert brd_cd is not None, (
             f"Unknown brand '{brand}'. "

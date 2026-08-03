@@ -43,7 +43,7 @@
   1. `/weekly-refresh` (현재 brand_config 브랜드) — **운영배포(Stage 6)는 보류**
   2. `/prepare-pipeline` 으로 다른 브랜드 전환 (같은 baseSeason)
   3. `/weekly-refresh` 재실행 — **여기서 운영배포 1회** (baseline 통째 업로드라 두 브랜드 갱신 완료 후 1회가 원칙)
-  > baseline DuckDB 는 멀티브랜드 적재라 앞 브랜드 데이터는 유지됩니다. `.env` 의 `BRAND` 도 brand_config 와 일치시켜야 합니다 (불일치 시 RuntimeError 가드).
+  > baseline DuckDB 는 멀티브랜드 적재라 앞 브랜드 데이터는 유지됩니다. 브랜드 전환은 `/prepare-pipeline`(= brand_config.json) **한 곳**이면 됩니다 — `.env` 에 BRAND 를 둘 필요 없음 (2026-08-03 이중관리 제거).
 
 스킬 없이 직접 명령으로 운영하려면 → 아래 **Quick Start** / **처음 셋업** 섹션.
 

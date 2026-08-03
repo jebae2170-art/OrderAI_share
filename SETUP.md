@@ -175,18 +175,18 @@ USER_STORAGE_PATH=data/user-storage
 
 ## 5. brand_config.json 확인
 
-`public/brand_config.json` 의 `brand` 필드가 `.env` 의 `BRAND` 와 **일치**해야 합니다 (대소문자는 무관, setup.sh 가 자동 검증).
+브랜드의 **단일 정본(SoT)은 `public/brand_config.json` 의 `brand` 필드**입니다 — `/prepare-pipeline` 이 관리하며, `.env` 에 BRAND 를 둘 필요가 없습니다 (2026-08-03 이중관리 제거).
 
 ```json
 {
-  "brand": "Duvetica",        ← .env 의 BRAND=DUVETICA 와 매칭 OK
-  "baseSeason": "25F",         ← 분석 기준 시즌
-  "targetSeason": "26F",       ← 발주 계획 시즌
+  "brand": "MLB",              ← 운영 브랜드 정본 (파이프라인·화면 공통)
+  "baseSeason": "26S",         ← 분석 기준 시즌
+  "targetSeason": "27S",       ← 발주 계획 시즌
   ...
 }
 ```
 
-불일치면 `./setup.sh` 가 `RuntimeError` + 명확한 메시지로 차단합니다.
+`.env` 에 `BRAND=` 를 설정하면 여전히 존중되지만, brand_config 와 불일치 시 `RuntimeError` 로 차단됩니다 (setup.sh smoke 가 자동 검증).
 
 ---
 
