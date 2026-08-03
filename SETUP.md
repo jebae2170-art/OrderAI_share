@@ -38,6 +38,10 @@ git clone https://github.com/Judyjieunb/OrderAI_share.git
 cd OrderAI_share
 ```
 
+**zip 으로 받은 경우**: 반드시 **Finder 에서 더블클릭**으로 압축을 푸세요.
+터미널 `unzip` 은 한글 파일명(`docs/STEP5_사이즈배분_운영가이드.md` 등) 인코딩이 깨져
+일부 파일이 손상됩니다 (macOS 터미널 대안: `ditto -x -k order-ai-share.zip <대상폴더>`).
+
 ---
 
 ## 2. Pre-meeting 셋업 (.env 없이 가능)
@@ -83,6 +87,15 @@ cd OrderAI_share
 
 > ⚠️ 옵션 B 의 password 는 plain email / Slack DM / USB unencrypted 로 절대 받지 마세요. 보안 정책 위반.
 
+**공통 — 모드 무관 필수 전달물** (zip/git 에 없음, 없으면 파이프라인·주간갱신 불가):
+
+| 항목 | 형식 | 없을 때 증상 |
+|---|---|---|
+| `restored.csv` (브랜드×시즌별) | 파일 → `data/{brand}/{season}/restored.csv` 에 배치 | run_all STEP 3 `KeyError: ADJ_SC_SALE_QTY_TAX` — 엔지니어 제공 복원수요라 **Snowflake 재생성 불가** |
+| `dcs-ai-cli` 설치본 + API key | §4.5 참조 | `/weekly-refresh` KG 교차검증 게이트 실행 불가 |
+
+> 전체 전달물 체크리스트는 `HANDOVER.md` 참조.
+
 ---
 
 ## 4. .env 설정
@@ -93,7 +106,9 @@ cp .env.example .env
 
 `.env` 편집. **두 모드 중 본인 선택**:
 
-### 옵션 A: SSO (externalbrowser) — 권장
+> **모드 선택**: 매주 반복하는 `/weekly-refresh` 루틴이 주 업무라면 **옵션 B (password) 권장** — SSO 는 매 실행 브라우저 팝업이 떠서 반복 루틴에 번거롭습니다. SSO 는 credential 을 .env 에 보관하지 않는 장점이 있어 일회성 조회·검증에 적합합니다.
+
+### 옵션 A: SSO (externalbrowser) — 일회성 조회용
 
 ```
 SNOWFLAKE_ACCOUNT=your_account.ap-northeast-2.aws
@@ -113,7 +128,7 @@ USER_STORAGE_PATH=data/user-storage
 
 setup.sh 또는 파이프라인 실행 시 브라우저 팝업이 떠서 본인 SSO login. 한 번 로그인하면 token 캐시되어 일정 시간 재로그인 불필요.
 
-### 옵션 B: Service Account + Password
+### 옵션 B: Service Account + Password — 주간 갱신 루틴 권장
 
 ```
 SNOWFLAKE_ACCOUNT=your_account.ap-northeast-2.aws   # 1Password 값
@@ -132,6 +147,35 @@ USER_STORAGE_PATH=data/user-storage
 ```
 
 `.env` 는 `.gitignore` 에 등록돼있어 절대 커밋되지 않습니다.
+
+---
+
+## 4.5. dcs-ai-cli 설치 (KG 교차검증 게이트 — /weekly-refresh 필수)
+
+`/weekly-refresh` 의 Stage 4 (지식그래프 교차검증 게이트)는 `dcs-ai-cli` 로 DCS AI KG API 를 호출합니다.
+**F&F 내부 배포 바이너리**라 공개 저장소에 없습니다 — 온보딩 미팅에서 설치본과 API key 를 받으세요 (프로세스팀/AX팀).
+
+1. **바이너리 배치** (macOS arm64):
+   ```bash
+   mkdir -p ~/.local/bin
+   cp <전달받은 dcs-ai-cli> ~/.local/bin/dcs-ai-cli
+   chmod +x ~/.local/bin/dcs-ai-cli
+   # PATH 에 없으면 (zsh):
+   echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+   ```
+2. **API key 설정** — 설정 파일은 `~/Library/Application Support/dcs-ai-cli/config.toml` (host / port / api_key / user_email):
+   ```bash
+   dcs-ai-cli config set   # 대화형 설정 (또는 config.toml 직접 편집)
+   dcs-ai-cli config show  # 확인
+   ```
+3. **동작 검증**:
+   ```bash
+   dcs-ai-cli --help   # 사용법 출력되면 설치 OK
+   ```
+   실제 API 왕복은 `/weekly-refresh` 첫 실행의 Stage 4 통과로 최종 확인됩니다.
+
+> 게이트 스크립트(`scripts/_verify_kg_crosscheck.py`)는 `~/.local/bin` 등 표준 경로를 자동 탐색하므로,
+> 위 위치에 설치하면 PATH 미설정 상태로도 동작합니다.
 
 ---
 

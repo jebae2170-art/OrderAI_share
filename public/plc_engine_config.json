@@ -124,6 +124,20 @@
         39
       ],
       "sale_col": "SC_SALE_QTY_TAX"
+    },
+    "27F": {
+      "season_code": "27F",
+      "season_type": "fw",
+      "seasons_for_plc": [
+        "25F",
+        "26F",
+        "27F"
+      ],
+      "fwo_range": [
+        1,
+        39
+      ],
+      "sale_col": "SC_SALE_QTY_TAX"
     }
   },
   "engine_params": {

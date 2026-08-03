@@ -14,7 +14,12 @@ KG 게이트 **실패 시 백업으로 롤백**한다 → "게이트 차단 시 
 ## 적용 시점 (trigger)
 
 - "주간 갱신", "주간 데이터 갱신", "weekly refresh", "최신 주차 반영"
-- 인시즌 운영 중 매주 1회 (권장: 월요일 — 직전 일요일 완결 주차 반영)
+- 인시즌 운영 중 매주 1회 — **월요일 09시 이후** (직전 일요일 완결 주차 반영)
+
+> ⚠️ **09시 이후인 이유**: 상류 GT 테이블(`FNF.ML_DIST.GT_SC_W`)의 주간 적재가 월요일 **~08시경** 완료된다.
+> 그 전에 실행하면 GT 가 지난주 상태로 조회되어 예측(as-of)만 한 주 뒤진 혼합 데이터가 만들어진다
+> (2026-08-03 원본 order_ai 06:00 자동실행에서 실제 발생). Stage 2/4 의 신선도 검사가 이를 잡아주지만,
+> 처음부터 09시 이후에 실행하는 것이 낭비가 없다.
 
 ## 절차 (순서대로 엄격히 진행)
 
@@ -27,13 +32,16 @@ test -f .env && echo "env:OK" || echo "env:MISSING"
 test -f public/brand_config.json && echo "config:OK" || echo "config:MISSING"
 test -f data/production/order_ai.duckdb && echo "baseline:OK" || echo "baseline:MISSING"
 (command -v dcs-ai-cli || ls ~/.local/bin/dcs-ai-cli /usr/local/bin/dcs-ai-cli /opt/homebrew/bin/dcs-ai-cli 2>/dev/null) >/dev/null 2>&1 && echo "kg-cli:OK" || echo "kg-cli:MISSING"
+PYTHONPATH=. .venv/bin/python -c "import sys; sys.path.insert(0,'scripts'); from config_loader import get_brand, get_base_season; import os; b,s=get_brand().lower(),get_base_season().lower(); print('restored:OK' if os.path.exists(f'data/{b}/{s}/restored.csv') else 'restored:MISSING')"
 pgrep -f "uvicorn server.api" >/dev/null && echo "server:RUNNING" || echo "server:STOPPED"
+mkdir -p output state data/user-storage   # 산출물 디렉토리 보장
 ```
 
 **미충족 시 즉시 종료** (어떤 파일도 건드리기 전):
 - `env:MISSING` → "`.env` 없음. **`/onboard`** 먼저." (무인에 가까운 실행을 위해 `SNOWFLAKE_AUTH=password` 권장 — SSO 는 브라우저 팝업 발생)
 - `config:MISSING` 또는 `baseline:MISSING` → "최초 파이프라인 미실행 상태. **`/prepare-pipeline` → `/run-pipeline`** 먼저. weekly-refresh 는 갱신 루틴입니다."
-- `kg-cli:MISSING` → "`dcs-ai-cli` 없음 — KG 교차검증 게이트 실행 불가. 설치(F&F 내부 배포본) 후 재시도하세요. 게이트 없이 갱신하는 우회는 이 스킬이 제공하지 않습니다(사용자가 명시적으로 요청한 경우에만 Stage 4 를 건너뛰되, '검증 없이 반영됨'을 결과에 굵게 명시)."
+- `kg-cli:MISSING` → "`dcs-ai-cli` 없음 — KG 교차검증 게이트 실행 불가. 설치는 `SETUP.md` §dcs-ai-cli 참조 후 재시도하세요. 게이트 없이 갱신하는 우회는 이 스킬이 제공하지 않습니다(사용자가 명시적으로 요청한 경우에만 Stage 4 를 건너뛰되, '검증 없이 반영됨'을 결과에 굵게 명시)."
+- `restored:MISSING` → "`data/{brand}/{season}/restored.csv` 없음 — 엔지니어 제공 복원수요 파일로 Snowflake 재생성 불가, **인수 패키지로만 전달** (`HANDOVER.md` 참조). 없으면 run_all STEP 3 가 `KeyError: ADJ_SC_SALE_QTY_TAX` 로 실패."
 - `server:RUNNING` → 사용자에게 안내: "run_all 의 DuckDB 적재(STEP 6)가 서버의 read-only 커넥션과 쓰기 락 충돌할 수 있습니다. 서버를 잠시 종료합니다." → uvicorn/vite 종료 후 진행 (완료 후 Stage 5 에서 재기동 안내).
 
 ### Stage 1 — 직전 baseline 백업
@@ -53,7 +61,8 @@ echo "백업 완료: $(ls data/.weekly_backup | wc -l) 파일"
 .venv/bin/python scripts/_refresh_data.py
 ```
 
-- 출력의 `max END_DT` 가 **직전 일요일(최신 완결 주차)** 인지 확인 — 아니면 Snowflake 원천 지연이므로 사용자에게 보고 후 중단(백업 불필요한 상태 그대로).
+- **판정 기준은 `gt` 행의 `max END_DT`** 가 **직전 일요일(최신 완결 주차)** 인지 — 아니면 상류 GT_SC_W 적재 지연(월 ~08시 완료)이므로 사용자에게 보고 후 중단, **09시 이후 재시도** (백업 불필요한 상태 그대로).
+  - ※ `d2`(weekly)의 max END_DT 는 미래 빈 주차(zero 꼬리) 때문에 시즌 말(예: 09-06)로 나오는 게 **정상** — 지연 판정에 쓰지 말 것.
 - d1/d2/gt 중 `error` 가 있으면 중단. (d3_r1/r2·d1_prev_asof 의 skip 은 비인시즌/모델 부재로 정상일 수 있음 — 메시지로 판단)
 
 ### Stage 3 — 분석 파이프라인 재실행 (run_all 6 step)

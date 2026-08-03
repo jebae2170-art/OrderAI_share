@@ -126,6 +126,32 @@ def _local_week_totals(brand_code, season_code):
     return {"qty": qty, "tag_amt": tag_amt, "start_dt": start_dt, "end_dt": end_dt}
 
 
+def _gt_last_sunday():
+    """직전 일요일(최신 완결 주마감) 날짜 문자열."""
+    today = datetime.now()
+    return (today - timedelta(days=today.weekday() + 1)).strftime("%Y-%m-%d")
+
+
+def _season_end_date(sesn):
+    """시즌코드 → 시즌 종료일 문자열 (SS=당해 08-31, FW=이듬해 02-28)."""
+    yy = 2000 + int(sesn[:2])
+    return f"{yy}-08-31" if sesn.upper().endswith("S") else f"{yy + 1}-02-28"
+
+
+def _gt_max_end_dt(brand_code, season_code):
+    """ground_truth.csv의 max END_DT. 파일 없으면 None."""
+    path = _ROOT / "data" / brand_code / season_code / "ground_truth.csv"
+    if not path.exists():
+        return None
+    mx = ""
+    with open(path, encoding="utf-8-sig") as f:
+        for r in csv.DictReader(f):
+            d = (r.get("END_DT") or "").strip()
+            if d > mx:
+                mx = d
+    return mx or None
+
+
 def _kg_totals(brd_cd, sesn, start_dt, end_dt):
     """dcs-ai-cli로 KG 판매량·판매택가 브랜드 총계 조회."""
     body = {
@@ -174,6 +200,22 @@ def run_crosscheck(tolerance=DEFAULT_TOLERANCE, verbose=True):
             ok = False
             lines.append(f"  ❌ {brand_code}: BRD_CD 매핑 없음 → BRAND_TO_BRD_CD에 추가 필요")
             continue
+        # GT(예측 입력) 신선도 — weekly_raw만 대사하면 GT가 통째로 한 주 밀려도 통과하므로
+        #   (2026-08-03 첫 무인 06:00 실행에서 실제 발생: 상류 GT_SC_W 적재 ~08시와 경합),
+        #   GT 최신 주마감 == 직전 일요일인지 직접 확인한다. 시즌 종료 후엔 생략.
+        expected_sun = _gt_last_sunday()
+        if expected_sun > _season_end_date(sesn):
+            lines.append(f"  ⚠️ {brand_code} {sesn} GT 신선도: 시즌 종료({_season_end_date(sesn)}) 경과 → 검사 생략")
+        else:
+            gt_max = _gt_max_end_dt(brand_code, season_code)
+            if gt_max == expected_sun:
+                lines.append(f"  ✅ {brand_code} {sesn} GT 신선도: max END_DT={gt_max} (직전 일요일)")
+            else:
+                ok = False
+                lines.append(
+                    f"  ❌ {brand_code} {sesn} GT 신선도: max END_DT={gt_max or 'ground_truth.csv 없음'}"
+                    f" ≠ 직전 일요일 {expected_sun} — 상류 GT_SC_W 적재 지연(월 ~08시) 가능성, 09시 이후 재실행 필요"
+                )
         loc = _local_totals(brand_code, season_code)
         # KG 기간: 시즌연도 전년초 ~ 로컬 최신 주차말 (양측 동일 구간 커버)
         start_dt = f"{2000 + int(sesn[:2]) - 1}-01-01"

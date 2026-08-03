@@ -59,9 +59,9 @@ data/plc/{brand_lower}_{type_lower}_plc_forecast_standard.csv
 
 **Case B — 부재**:
 1. 사용자에게 안내: "PLC csv 없음 → build_plc_standard.py 실행. data/{BRAND}_GT_*.csv 자동 탐색 또는 Snowflake fallback."
-2. **Bash 로 빌드 실행**:
+2. **Bash 로 빌드 실행** (반드시 `.venv/bin/python` — 시스템 python3 은 의존성 없음):
    ```
-   cd <project_root> && BRAND=<brand_upper> PYTHONPATH=. python3 scripts/plc_engine/build_plc_standard.py
+   cd <project_root> && BRAND=<brand_upper> PYTHONPATH=. .venv/bin/python scripts/plc_engine/build_plc_standard.py
    ```
 3. 종료 코드 확인:
    - **성공 (exit 0)**: 출력 끝부분의 `행 수`, `아이템 수` 발췌해서 사용자에게 보고. Drift report 가 있으면 그 결과도 한 줄 요약.

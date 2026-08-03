@@ -17,13 +17,17 @@ apps/lite/node_modules/
 apps/lite/dist/
 
 # --- Runtime data ---
+# ※ 디렉토리 자체는 .gitkeep으로 추적 — zip(git archive) 배포 시 빈 폴더가 누락되어
+#   run_all STEP 1이 "output/ 없음"으로 즉사하던 문제 방지 (2026-08-03 clean-room 실측).
 data/production/*.duckdb
-data/user-storage/
+data/user-storage/*
+!data/user-storage/.gitkeep
 # 표준 PLC (data/plc/{brand}_{type}_plc_forecast_standard.csv) 는 git 추적 — 배포자가 사전 빌드해서 동봉.
 # Drift report 만 transient (timestamped per run) — 미추적.
 data/plc/*_drift_report_*.csv
 data/*.csv
-output/
+output/*
+!output/.gitkeep
 logs/
 tmp/
 

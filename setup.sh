@@ -108,8 +108,11 @@ if [ "$SKIP_SNOWFLAKE" = true ]; then
 fi
 
 echo "[5/5] Running smoke test (Snowflake connectivity)..."
+# set -e 하에서 pytest 실패 시 스크립트가 즉사해 아래 FAILED 진단이 출력되지 않던 문제 방지
+set +e
 python -m pytest smoke_test.py -v --tb=short
 RESULT=$?
+set -e
 
 echo ""
 if [ $RESULT -eq 0 ]; then

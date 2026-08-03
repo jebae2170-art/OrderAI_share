@@ -29,6 +29,17 @@
 
 각 스킬은 실패 시 진단 메시지와 함께 다음 행동을 안내합니다. 수동 트러블슈팅은 [`SETUP.md`](./SETUP.md) / [`CLAUDE.md`](./CLAUDE.md) 가 폴백.
 
+### 주간 운영 루틴 (인시즌)
+
+**매주 월요일 09시 이후** (상류 GT 주간 적재가 월 ~08시 완료 — 그 전 실행 시 예측 기준이 지난주로 밀림):
+
+- **단일 브랜드 운영**: `/weekly-refresh` 1회.
+- **두 브랜드 운영 (예: MLB + Discovery)**: 브랜드마다 반복 —
+  1. `/weekly-refresh` (현재 brand_config 브랜드)
+  2. `/prepare-pipeline` 으로 다른 브랜드 전환 (같은 baseSeason)
+  3. `/weekly-refresh` 재실행
+  > baseline DuckDB 는 멀티브랜드 적재라 앞 브랜드 데이터는 유지됩니다. `.env` 의 `BRAND` 도 brand_config 와 일치시켜야 합니다 (불일치 시 RuntimeError 가드).
+
 스킬 없이 직접 명령으로 운영하려면 → 아래 **Quick Start** / **처음 셋업** 섹션.
 
 ---

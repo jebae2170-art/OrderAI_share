@@ -53,7 +53,33 @@ class SeasonSpec:
     @classmethod
     def from_json(cls, path: str, season_code: str) -> SeasonSpec:
         data = json.load(open(path))
-        s = data["seasons"][season_code]
+        if season_code in data["seasons"]:
+            s = data["seasons"][season_code]
+        else:
+            # 미등록 시즌 fallback: 접미사(F/S)로 타입 도출, PLC는 직전 2개+당해 시즌.
+            #   신규 시즌 전환 시 config 등록 누락으로 KeyError 나던 것을 방지 (등록값이 항상 우선).
+            suffix = season_code[-1:].upper()
+            if suffix not in ("F", "S"):
+                raise RuntimeError(
+                    f"시즌코드 접미사 인식 불가: {season_code!r} (F/S 필요) — "
+                    f"plc_engine_config.json seasons에 직접 등록하세요"
+                )
+            try:
+                yy = int(season_code[:-1])
+            except ValueError:
+                raise RuntimeError(
+                    f"시즌코드 연도 파싱 불가: {season_code!r} — "
+                    f"plc_engine_config.json seasons에 직접 등록하세요"
+                )
+            s = {
+                "season_code": season_code,
+                "season_type": "fw" if suffix == "F" else "ss",
+                "seasons_for_plc": [f"{yy - 2}{suffix}", f"{yy - 1}{suffix}", season_code],
+                "fwo_range": [1, 39],
+                "sale_col": "SC_SALE_QTY_TAX",
+            }
+            print(f"[SeasonSpec] '{season_code}' 미등록 → fallback 스펙 생성 "
+                  f"(PLC 시즌: {s['seasons_for_plc']})")
         s["fwo_range"] = tuple(s["fwo_range"])
         spec = cls(**s)
         # season_end_fwo: 시즌 마감일 ISO주차 → fw_order 적용 (SS 항등=ISO주차, FW=39).

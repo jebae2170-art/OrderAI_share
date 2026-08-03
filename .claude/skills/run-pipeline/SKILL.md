@@ -21,14 +21,18 @@ description: order-ai-share 분석 파이프라인 실행. brand_config.json 의
 
 ```bash
 test -f public/brand_config.json && echo "config:OK" || echo "config:MISSING"
-PYTHONPATH=. python3 -c "import sys; sys.path.insert(0,'scripts'); from config_loader import get_brand, get_base_season, get_target_season, get_plc_forecast_path; print(f'brand={get_brand()}'); print(f'baseSeason={get_base_season()}'); print(f'targetSeason={get_target_season()}'); import os; p=get_plc_forecast_path(); print(f'plc:{os.path.basename(p)}:{ \"OK\" if os.path.exists(p) else \"MISSING\"}')" 2>&1
+PYTHONPATH=. .venv/bin/python -c "import sys; sys.path.insert(0,'scripts'); from config_loader import get_brand, get_base_season, get_target_season, get_plc_forecast_path; print(f'brand={get_brand()}'); print(f'baseSeason={get_base_season()}'); print(f'targetSeason={get_target_season()}'); import os; p=get_plc_forecast_path(); print(f'plc:{os.path.basename(p)}:{ \"OK\" if os.path.exists(p) else \"MISSING\"}'); b,s=get_brand().lower(),get_base_season().lower(); print(f'restored:{ \"OK\" if os.path.exists(f\"data/{b}/{s}/restored.csv\") else \"MISSING\"}')" 2>&1
 test -f .env && echo "env:OK" || echo "env:MISSING"
+mkdir -p output state data/user-storage data/production   # 산출물 디렉토리 보장 (없으면 STEP 1 즉사)
 ```
+
+> ⚠️ 반드시 `.venv/bin/python` 사용 — 시스템 `python3` 은 duckdb 등 의존성이 없어 STEP 6 에서 실패한다.
 
 **미충족 시 즉시 종료**:
 - `config:MISSING` 또는 identity 필드 누락 → "**`/prepare-pipeline`** 먼저 호출하여 brand+season 셋팅하세요."
 - `plc:.*MISSING` → "PLC csv 없음. **`/prepare-pipeline`** 가 Stage 3 에서 자동 빌드. 다시 실행 후 본 스킬 호출."
 - `env:MISSING` → "**`.env`** 없음. **`/onboard`** 먼저 호출하여 Snowflake 인증 셋팅."
+- `restored:MISSING` → "`data/{brand}/{season}/restored.csv` 없음 — 엔지니어 제공 복원수요 파일로 **Snowflake 재생성 불가, 인수 패키지로만 전달됨** (`HANDOVER.md` 별도 전달물 참조). 없으면 STEP 3 (PLC 엔진) 이 `KeyError: ADJ_SC_SALE_QTY_TAX` 로 실패한다."
 
 모두 충족 시 Stage 1 로.
 
@@ -98,8 +102,12 @@ test -f .env && echo "env:OK" || echo "env:MISSING"
 **Bash (run_in_background=true)**:
 
 ```bash
-cd <project_root> && PYTHONPATH=. python3 scripts/run_all.py > /tmp/run_pipeline.log 2>&1
+cd <project_root> && PYTHONPATH=. ORDERAI_BROKEN_VANCHOR=1 .venv/bin/python scripts/run_all.py > /tmp/run_pipeline.log 2>&1
 ```
+
+> `ORDERAI_BROKEN_VANCHOR=1` 은 원본(order_ai) 운영 확정값 — 인시즌 결품 SC 의 forward 투영 고정.
+> 마감시즌 실행에는 영향 없으므로 항상 포함해 `/weekly-refresh` 와 결과 일관성을 유지한다.
+> 인터프리터는 반드시 `.venv/bin/python` (시스템 python3 금지 — 의존성 없음).
 
 Background ID 사용자에게 안내: "파이프라인 실행 중 (예상 3-10분). 완료되면 결과 진단합니다."
 

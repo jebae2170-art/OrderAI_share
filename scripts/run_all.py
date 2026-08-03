@@ -100,5 +100,11 @@ def main():
     if os.name == 'nt': # Windows인 경우
         os.system('pause')
 
+    # 종료코드 명시: /weekly-refresh 등 자동화가 실패를 감지하도록.
+    #   기존엔 스텝 실패에도 항상 exit 0 → 부분실패 산출물이 조용히 baseline 적재로
+    #   흘러갈 수 있었다. 6단계 미완주 시 exit 1. (원본 order_ai 정본 미러링)
+    if success_count != len(scripts):
+        sys.exit(1)
+
 if __name__ == "__main__":
     main()
