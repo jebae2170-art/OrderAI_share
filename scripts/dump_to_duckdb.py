@@ -230,6 +230,14 @@ def _resolve_brand_season(args) -> tuple[str, str, str | None]:
     base_season = None
 
     if brand and season:
+        # CLI 인자로 받아도 base_season은 brand_config에서 추론 — run_all이 --brand/--season을
+        #   명시해 호출하면 base_season=None으로 적재되어, KG 게이트 _targets()(base_season IS
+        #   NOT NULL 행만 검증)가 빈 목록 → 게이트가 아무것도 검증 않고 통과하던 결함(2026-08-03).
+        bc_path = Path(args.json_dir) / "brand_config.json"
+        if bc_path.exists():
+            bc = _load_json(bc_path)
+            if (bc.get("baseSeason") or "").lower() == season.lower():
+                base_season = bc.get("baseSeason")
         return brand.lower(), season.lower(), base_season
 
     bc_path = Path(args.json_dir) / "brand_config.json"
