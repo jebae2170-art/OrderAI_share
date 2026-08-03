@@ -4,6 +4,11 @@
 
 전 시즌 마감 실적 + 자기 브랜드 PLC 표준 곡선을 활용해 차시즌 발주 수량/예산/사이즈 아소트를 5단계 워크플로우로 제안합니다.
 
+**📖 무엇을 읽어야 하나** — 역할별 필독은 1개뿐입니다:
+- **운영담당자(주간갱신)**: [`HANDOVER.md`](./HANDOVER.md) 하나로 시작~매주 루틴까지. 문제 시 [`SETUP.md`](./SETUP.md) §Troubleshooting.
+- **개발/코드 인수**: 본 README → [`CLAUDE.md`](./CLAUDE.md)(변경 가드레일) → [`SETUP.md`](./SETUP.md).
+- 나머지(`docs/`·`queries/README.md`)는 참조용 — 안 읽어도 운영 가능합니다.
+
 ---
 
 ## 누가 / 언제 / 왜

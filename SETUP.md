@@ -87,14 +87,8 @@ cd OrderAI_share
 
 > ⚠️ 옵션 B 의 password 는 plain email / Slack DM / USB unencrypted 로 절대 받지 마세요. 보안 정책 위반.
 
-**공통 — 모드 무관 필수 전달물** (zip/git 에 없음, 없으면 파이프라인·주간갱신 불가):
-
-| 항목 | 형식 | 없을 때 증상 |
-|---|---|---|
-| `restored.csv` (브랜드×시즌별) | 파일 → `data/{brand}/{season}/restored.csv` 에 배치 | run_all STEP 3 `KeyError: ADJ_SC_SALE_QTY_TAX` — 엔지니어 제공 복원수요라 **Snowflake 재생성 불가** |
-| `dcs-ai-cli` 설치본 + API key | §4.5 참조 | `/weekly-refresh` KG 교차검증 게이트 실행 불가 |
-
-> 전체 전달물 체크리스트는 `HANDOVER.md` 참조.
+**공통 — 모드 무관 필수 전달물**: 전체 목록·형식·없을 때 증상은 **`HANDOVER.md` §1 이 정본**입니다
+(restored.csv · dcs-ai-cli+키 · S3_API_KEY · EC2 ssh 키 — zip/git 에 없어 별도 전달 필수).
 
 ---
 

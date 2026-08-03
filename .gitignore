@@ -48,3 +48,6 @@ coverage/
 # --- Internal tooling (운영자 미포함) ---
 .omc/
 .claude/projects/
+
+# 편집 백업 잔재 — repo/배포본 제외
+*.bak-share
