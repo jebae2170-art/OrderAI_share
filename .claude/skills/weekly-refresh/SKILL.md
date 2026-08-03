@@ -1,12 +1,14 @@
 ---
 name: weekly-refresh
-description: 주간판매데이터 갱신 E2E — Snowflake 강제 재조회 → run_all 6 step 재실행 → 지식그래프(KG) 교차검증 게이트 → 통과 시에만 baseline 반영(실패 시 직전 baseline 자동 롤백). 인시즌 주차 갱신 루틴. /run-pipeline 이 최초 1회 완료된 이후에 사용.
+description: 주간판매데이터 갱신 E2E — Snowflake 강제 재조회 → run_all 6 step 재실행 → 지식그래프(KG) 교차검증 게이트 → 통과 시에만 baseline 반영(실패 시 직전 baseline 자동 롤백) → 운영배포(S3 업로드 → EC2 재시작 → 서빙검증, 자격 구비 시). 인시즌 주차 갱신 루틴. /run-pipeline 이 최초 1회 완료된 이후에 사용.
 ---
 
 # weekly-refresh
 
 원본(order_ai)의 주간갱신 E2E 체인(`weekly_refresh_and_deploy.sh`)을 order-ai-share 모델로 이식한 스킬.
-원본과의 차이: 멀티브랜드 루프 없음(단일 브랜드), S3/EC2 배포 없음(로컬 baseline 교체가 곧 배포), Slack 알림 없음.
+원본과의 차이: 멀티브랜드 루프 없음(단일 브랜드 — 두 브랜드는 `/prepare-pipeline` 전환 후 재실행), Slack 알림 없음.
+**운영배포(S3→EC2)는 원본과 동일하게 포함** (Stage 6) — 단, S3_API_KEY·ssh 키가 구비된 경우에만 실행되고
+미구비 시 로컬 baseline 반영까지로 정상 종료한다 (2026-08-03 이식).
 
 **핵심 안전장치**: run_all 은 baseline DuckDB 를 직접 덮어쓰므로, 실행 전 직전 baseline 을 백업하고
 KG 게이트 **실패 시 백업으로 롤백**한다 → "게이트 차단 시 운영은 직전 baseline 유지" 라는 원본 시맨틱 보존.
@@ -89,9 +91,40 @@ ORDERAI_BROKEN_VANCHOR=1 .venv/bin/python scripts/run_all.py
 rm -rf data/.weekly_backup
 ```
 
-- 서버는 요청마다 read-only 커넥션을 새로 열므로 별도 배포 절차 없음 — **갱신된 baseline 이 곧 서빙 데이터**.
+- 로컬 서버는 요청마다 read-only 커넥션을 새로 열므로 별도 절차 없음 — **갱신된 baseline 이 곧 로컬 서빙 데이터**.
 - Stage 0 에서 서버를 종료했다면 **`/server-start`** 로 재기동 안내.
-- 결과 요약 출력: 갱신 주차(END_DT), KG 대사 결과 라인, "✅ 주간 갱신 완료 — KG 교차검증 통과, baseline 반영됨".
+- 중간 요약 출력: 갱신 주차(END_DT), KG 대사 결과 라인 → **Stage 6 (운영배포) 로 진행**.
+
+### Stage 6 — 운영배포 (S3 업로드 → EC2 재시작 → 서빙검증)
+
+원본 운영과 동일한 배포 체인. **프리플라이트 먼저**:
+
+```bash
+grep -qE "^S3_API_KEY=.+" .env && echo "s3-key:OK" || echo "s3-key:MISSING"
+ssh -o BatchMode=yes -o ConnectTimeout=10 ec2-business-user@10.81.3.230 "echo ssh:OK" 2>/dev/null || echo "ssh:MISSING"
+```
+
+**둘 중 하나라도 MISSING** → 배포 생략하고 정상 종료:
+- "✅ 주간 갱신 완료 — KG 교차검증 통과, **로컬 baseline 반영됨**. ⚠️ 운영배포는 자격 미구비로 생략
+  (S3_API_KEY 는 `.env`, EC2 ssh 키는 `HANDOVER.md` 전달물 참조). 운영(EC2 8520)은 기존 데이터 유지."
+
+**둘 다 OK** → 배포 실행:
+
+```bash
+bash scripts/_auto_deploy_prd.sh
+```
+
+내부 3단계 (로그: `logs/deploy/<TS>.log`):
+1. `_deploy_baseline_prd.py --confirm` — 라이브 prd 백업(`rollback/`) → 커버리지·과거시즌 불변·KG 게이트 재검증 → S3 업로드
+2. EC2 lite 컨테이너 재시작 (`docker compose restart` — S3 새 baseline 재pull)
+3. `_verify_prd_serving.py` — health 200 + 서빙 pipeline_version == 로컬 대사
+
+- **exit 0** → "✅ 주간 갱신 + 운영배포 완료 — 갱신 주차(END_DT)·KG 대사·서빙검증 요약" 출력.
+- **exit ≠ 0** → 로그 마지막 20줄 출력 + 단계별 안내:
+  - STEP 1 실패 = 업로드 전 차단 → **운영은 기존 baseline 유지** (안전). 원인 해결 후 재시도.
+  - STEP 2 실패 = S3 는 갱신됐으나 EC2 미반영 → EC2 수동 재시작 필요 (`ssh ec2-business-user@10.81.3.230 "cd 20_OrderAI/apps/lite && docker compose restart"`).
+  - STEP 3 실패 = 재시작됐으나 버전 불일치/health 실패 → 로그 확인, 필요 시 `rollback/` 백업으로 되돌리기.
+- ⚠️ 두 브랜드 운영 시: 배포는 **두 번째 브랜드 갱신까지 끝낸 뒤 1회만** — baseline DuckDB 통째 업로드라 중간 배포는 첫 브랜드만 최신인 상태를 서빙하게 됨.
 
 ### Stage 5-FAIL — 롤백 (직전 baseline 유지)
 
@@ -108,4 +141,5 @@ rm -rf data/.weekly_backup
 ## 주의
 
 - 본 스킬은 **인시즌 주간 루틴**이다. 브랜드/시즌 전환은 `/prepare-pipeline`, 최초 실행은 `/run-pipeline` 책임.
-- `scripts/_refresh_data.py` · `scripts/_verify_kg_crosscheck.py` 는 원본(order_ai) 정본 미러링 파일 — 수정 필요 시 오너에게 원천 반영 요청 (CLAUDE.md §2 동기화 예외 참조).
+- `scripts/_refresh_data.py` · `scripts/_verify_kg_crosscheck.py` · `scripts/_deploy_baseline_prd.py` · `scripts/_auto_deploy_prd.sh` · `scripts/_verify_prd_serving.py` · `server/s3_client.py` 는 원본(order_ai) 정본 미러링 파일 — 수정 필요 시 오너에게 원천 반영 요청 (CLAUDE.md §2 동기화 예외 참조).
+- **활성 배포 주체는 전체에서 한 곳만** — 이 폴더에서 운영배포를 시작하면 원본 머신의 n8n 주간 자동배포는 비활성화되어 있어야 한다 (이중 배포 경합 방지, 컷오버 절차는 원본 `docs/주간자동화_운영이관_가이드.md`).

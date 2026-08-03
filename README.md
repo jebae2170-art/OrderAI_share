@@ -25,7 +25,7 @@
 | 2 | `/prepare-pipeline` | brand+season 셋업 + PLC csv 확보 (없으면 자동 빌드) |
 | 3 | `/run-pipeline` | 분석 임계값 4종 (목표판매율 / 대물량 목표판매율 / 대물량 기준 / 등급 기준) 검토 + `run_all.py` 6 step (5 분석 + baseline DuckDB 적재) + 결과 진단 |
 | 4 | `/server-start` | 백엔드 + 프론트엔드 기동 + 브라우저 자동 띄우기 + 5 step UI 체크리스트 + 종료 안내 |
-| (반복) | `/weekly-refresh` | 인시즌 주간 갱신 — Snowflake 재조회 → run_all 재실행 → KG 교차검증 게이트 → 통과 시에만 baseline 반영(실패 시 직전 baseline 롤백) |
+| (반복) | `/weekly-refresh` | 인시즌 주간 갱신 — Snowflake 재조회 → run_all 재실행 → KG 교차검증 게이트 → 통과 시에만 baseline 반영(실패 시 직전 baseline 롤백) → **운영배포(S3→EC2 재시작→서빙검증, 자격 구비 시)** |
 
 각 스킬은 실패 시 진단 메시지와 함께 다음 행동을 안내합니다. 수동 트러블슈팅은 [`SETUP.md`](./SETUP.md) / [`CLAUDE.md`](./CLAUDE.md) 가 폴백.
 
@@ -35,9 +35,9 @@
 
 - **단일 브랜드 운영**: `/weekly-refresh` 1회.
 - **두 브랜드 운영 (예: MLB + Discovery)**: 브랜드마다 반복 —
-  1. `/weekly-refresh` (현재 brand_config 브랜드)
+  1. `/weekly-refresh` (현재 brand_config 브랜드) — **운영배포(Stage 6)는 보류**
   2. `/prepare-pipeline` 으로 다른 브랜드 전환 (같은 baseSeason)
-  3. `/weekly-refresh` 재실행
+  3. `/weekly-refresh` 재실행 — **여기서 운영배포 1회** (baseline 통째 업로드라 두 브랜드 갱신 완료 후 1회가 원칙)
   > baseline DuckDB 는 멀티브랜드 적재라 앞 브랜드 데이터는 유지됩니다. `.env` 의 `BRAND` 도 brand_config 와 일치시켜야 합니다 (불일치 시 RuntimeError 가드).
 
 스킬 없이 직접 명령으로 운영하려면 → 아래 **Quick Start** / **처음 셋업** 섹션.

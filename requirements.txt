@@ -1,5 +1,6 @@
 # order-ai-share — Python 의존성
-# 슬림화 1차: anthropic / openai / httpx 제거 (정적 분석 0 import 확인됨).
+# 슬림화 1차: anthropic / openai 제거 (정적 분석 0 import 확인됨).
+# httpx 는 운영배포 체인(server/s3_client.py — S3 Presigned URL API)이 사용해 복원(2026-08-03).
 # matplotlib / seaborn 은 scripts/main.py 가 차트 생성에 실사용 → 유지.
 
 pandas>=2.0.0
@@ -13,4 +14,5 @@ python-dotenv>=1.0.0
 python-multipart>=0.0.9
 snowflake-connector-python>=3.6.0
 duckdb>=1.5.0,<2.0
+httpx>=0.27.0
 pytest>=7.0.0

@@ -28,6 +28,8 @@ data/plc/*_drift_report_*.csv
 data/*.csv
 output/*
 !output/.gitkeep
+rollback/*
+!rollback/.gitkeep
 logs/
 tmp/
 
