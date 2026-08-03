@@ -18,6 +18,10 @@ PY="$ROOT/.venv/bin/python3"
 # EC2 접속 대상은 .env::EC2_SSH_TARGET 에서 주입 (공개 저장소 — 내부 식별자 하드코딩 금지)
 EC2="$(grep -E '^EC2_SSH_TARGET=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
 [ -n "$EC2" ] || { echo "❌ EC2_SSH_TARGET 미설정 (.env) — 운영배포 불가 (HANDOVER.md 전달물 참조)"; exit 1; }
+# (선택) 전용 ssh 키 — .env::EC2_SSH_KEY_PATH. 미설정 시 기본 ~/.ssh 키 사용.
+EC2_KEY="$(grep -E '^EC2_SSH_KEY_PATH=' "$ROOT/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15)
+[ -n "$EC2_KEY" ] && SSH_OPTS+=(-o IdentitiesOnly=yes -i "${EC2_KEY/#\~/$HOME}")
 EC2_COMPOSE_DIR="20_OrderAI/apps/lite"
 
 LOG_DIR="$ROOT/logs/deploy"
@@ -34,7 +38,7 @@ if ! (cd "$ROOT" && PYTHONPATH="$ROOT" PYTHONIOENCODING=utf-8 "$PY" -u scripts/_
 fi
 
 log "STEP 2/3: EC2 컨테이너 재시작 (docker compose restart @ $EC2_COMPOSE_DIR)"
-if ! ssh -o BatchMode=yes -o ConnectTimeout=15 "$EC2" \
+if ! ssh "${SSH_OPTS[@]}" "$EC2" \
     "cd $EC2_COMPOSE_DIR && docker compose restart" >>"$LOG" 2>&1; then
   log "❌ EC2 재시작 실패 — S3는 갱신됐으나 운영 미반영. 수동 재시작 필요"
   exit 1

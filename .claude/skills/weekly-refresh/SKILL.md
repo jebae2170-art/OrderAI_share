@@ -102,8 +102,11 @@ rm -rf data/.weekly_backup
 ```bash
 grep -qE "^S3_API_KEY=.+" .env && echo "s3-key:OK" || echo "s3-key:MISSING"
 EC2="$(grep -E '^EC2_SSH_TARGET=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
-{ [ -n "$EC2" ] && ssh -o BatchMode=yes -o ConnectTimeout=10 "$EC2" "echo ssh:OK" 2>/dev/null; } || echo "ssh:MISSING"
+KEY="$(grep -E '^EC2_SSH_KEY_PATH=' .env 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')"
+{ [ -n "$EC2" ] && ssh ${KEY:+-o IdentitiesOnly=yes -i "${KEY/#\~/$HOME}"} -o BatchMode=yes -o ConnectTimeout=10 "$EC2" "echo ssh:OK" 2>/dev/null; } || echo "ssh:MISSING"
 ```
+
+> 전용 키를 쓰면 `.env` 에 `EC2_SSH_KEY_PATH` 만 지정 — 배포 스크립트 3종이 동일하게 자동 사용한다.
 
 **둘 중 하나라도 MISSING** → 배포 생략하고 정상 종료:
 - "✅ 주간 갱신 완료 — KG 교차검증 통과, **로컬 baseline 반영됨**. ⚠️ 운영배포는 자격 미구비로 생략

@@ -21,19 +21,34 @@ _ROOT = Path(__file__).resolve().parent.parent
 LOCAL_DB = _ROOT / "data" / "production" / "order_ai.duckdb"
 
 
-def _ec2_host():
-    """EC2 접속 대상 — env 우선, 없으면 .env 파싱 (공개 저장소라 하드코딩 금지)."""
-    v = os.getenv("EC2_SSH_TARGET", "").strip()
+def _env_val(key):
+    """환경변수 우선, 없으면 .env 파싱 (standalone 실행 지원)."""
+    v = os.getenv(key, "").strip()
     if not v:
         env_path = _ROOT / ".env"
         if env_path.exists():
             for ln in env_path.read_text(encoding="utf-8").splitlines():
-                if ln.startswith("EC2_SSH_TARGET="):
+                if ln.startswith(key + "="):
                     v = ln.split("=", 1)[1].strip().strip('"')
                     break
+    return v
+
+
+def _ec2_host():
+    """EC2 접속 대상 — .env::EC2_SSH_TARGET (공개 저장소라 하드코딩 금지)."""
+    v = _env_val("EC2_SSH_TARGET")
     if not v:
         sys.exit("EC2_SSH_TARGET 미설정 (.env) — 서빙검증 불가 (HANDOVER.md 전달물 참조)")
     return v
+
+
+def _ssh_opts():
+    """(선택) 전용 ssh 키 — .env::EC2_SSH_KEY_PATH. 미설정 시 기본 ~/.ssh 키 사용."""
+    opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=15"]
+    key = _env_val("EC2_SSH_KEY_PATH")
+    if key:
+        opts += ["-o", "IdentitiesOnly=yes", "-i", os.path.expanduser(key)]
+    return opts
 
 
 EC2_HOST = _ec2_host()
@@ -57,7 +72,7 @@ def _remote_health_and_versions():
     cmd = ("curl -s -o /dev/null -w '%{http_code}' http://localhost:8520/health; echo; "
            f"docker exec lite-app-1 python -c \"{remote_py}\"")
     proc = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", EC2_HOST, cmd],
+        ["ssh", *_ssh_opts(), EC2_HOST, cmd],
         capture_output=True, text=True, timeout=120,
     )
     if proc.returncode != 0:
